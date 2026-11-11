@@ -1,0 +1,10 @@
+# secretos
+.env
+*.pem
+
+# python
+.venv/
+__pycache__/
+
+# artefactos de la app (pesados; se copian del repo de la cátedra)
+ej2/artifacts/
