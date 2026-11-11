@@ -21,7 +21,6 @@ Banco Centralis: reporte de usuarios en Bash (ejercicio 1) y despliegue de la ap
     ├── requirements.txt          dependencias de Python (boto3)
     ├── config.py                 parámetros compartidos (región, nombres, tags, tamaños)
     ├── deploy.py                 despliega toda la infraestructura
-    ├── destroy.py                borra todo lo que crea deploy.py
     ├── user_data_backend.sh      plantilla de arranque de la EC2 backend
     ├── user_data_frontend.sh     plantilla de arranque de la EC2 frontend
     └── artifacts/                (no se sube a Git) binario y estáticos de la app
@@ -87,13 +86,13 @@ _COMPLETAR: pegar acá la captura de pantalla de una ejecución correcta (guarda
 
 ## Descripción
 
-`deploy.py` despliega en AWS Academy Learner Lab la aplicación ServiceDesk (sistema de tickets): un frontend React servido por Nginx, una API en Go y una base PostgreSQL 16 en RDS. `destroy.py` elimina todo lo creado.
+`deploy.py` despliega en AWS Academy Learner Lab la aplicación ServiceDesk (sistema de tickets): un frontend React servido por Nginx, una API en Go y una base PostgreSQL 16 en RDS.
 
 ## Arquitectura
 
 ```
 Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL 16
-                       S3 (artefactos) ... SSM Parameter Store (contraseña de la base)
+                       S3 (artefactos que descargan las instancias)
 ```
 
 | Security group | Puerto | Origen permitido |
@@ -102,7 +101,7 @@ Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> R
 | `servicedesk-sg-backend` | 8080 | Solo el security group del frontend |
 | `servicedesk-sg-rds` | 5432 | Solo el security group del backend |
 
-No se abre el puerto 22: la administración de las instancias se hace por SSM.
+No se abre el puerto 22: los comandos se ejecutan en las instancias por SSM.
 
 ## Requisitos
 
@@ -123,11 +122,10 @@ pip install -r ej2/requirements.txt
    - `servicedesk` (binario de la API)
    - `web.tar.gz` (estáticos del frontend)
    - `docs/index.html` y `docs/openapi.yaml` (documentación que sirve `/docs`)
-4. **Variables de entorno** (las contraseñas no están en el código):
+4. **Variable de entorno** (la contraseña no está en el código):
 
 ```bash
-export RDS_ADMIN_PASSWORD='una-contraseña-segura'   # mínimo 8 caracteres, sin / @ comillas ni espacios
-export APP_ADMIN_PASSWORD='...'                     # opcional: para probar el login del admin al final
+export RDS_ADMIN_PASSWORD='una-contraseña-segura'   # mínimo 8 caracteres, sin / @ " ' $ ni espacios
 ```
 
 ## Modo de uso
@@ -135,23 +133,22 @@ export APP_ADMIN_PASSWORD='...'                     # opcional: para probar el l
 ```bash
 cd ej2
 python3 deploy.py     # tarda unos 15 minutos (la base de datos es lo más lento)
-python3 destroy.py    # borra todo
 ```
 
-`deploy.py` se puede volver a ejecutar: si un recurso ya existe, lo reutiliza.
+Si se vuelve a ejecutar con recursos ya creados puede fallar: los recursos hay que borrarlos a mano desde la consola de AWS (ver *Pendientes de revisar*).
 
 ## Qué hace el despliegue
 
 | Paso | Qué hace | Función |
 |---|---|---|
-| 2 | Lee la contraseña de la base de la variable de entorno y la guarda cifrada en SSM Parameter Store | `guardar_password` |
-| 3 | Crea el bucket S3, bloquea el acceso público, lo cifra y sube los artefactos | `crear_bucket_y_subir_artefactos` |
+| 2 | Lee la contraseña de la base de la variable de entorno | `leer_password` |
+| 3 | Crea el bucket S3 y sube los artefactos | `crear_bucket_y_subir_artefactos` |
 | 4 | Crea los tres security groups y sus reglas encadenadas | `crear_security_groups` |
-| 5 | Crea la RDS PostgreSQL 16 sin IP pública y espera a que esté disponible | `crear_base_de_datos` |
+| 5 | Crea la RDS PostgreSQL 16 sin IP pública, espera a que esté disponible y obtiene el endpoint | `crear_base_de_datos` |
 | 6 | Arma el user data de cada instancia reemplazando los marcadores `__NOMBRE__` | `armar_user_data` |
 | 7 | Lanza la EC2 backend (descarga el binario, crea el servicio systemd y el `.env`) | `crear_instancia` |
 | 8 | Lanza la EC2 frontend con la IP privada del backend (Nginx + estáticos) | `crear_instancia` |
-| 9 | Por SSM: completa CORS, reinicia la API y verifica backend, Nginx y la web por la IP pública | `configurar_backend`, `verificar_frontend`, `verificar_desde_internet` |
+| 9 | Por SSM: completa CORS con la IP del frontend, reinicia la API y verifica el `/health` del backend y de Nginx | `configurar_backend`, `verificar_frontend` |
 
 ## Verificación
 
@@ -166,25 +163,14 @@ En el navegador, abrir `http://<IP_FRONTEND>` (con `http://` explícito: no hay 
 
 ## Seguridad
 
-- Contraseñas fuera del código: variables de entorno y SSM Parameter Store (`SecureString`). La contraseña de la base no viaja escrita en el user data.
+- La contraseña de la base no está en el código: se lee de una variable de entorno.
 - Security groups encadenados: la base solo acepta tráfico del backend y el backend solo del frontend. Sin puerto 22.
-- RDS sin IP pública y con el disco cifrado.
-- Bucket S3 con acceso público bloqueado y cifrado.
-- Instancias con IMDSv2 obligatorio y disco cifrado.
-- La API corre con un usuario de sistema sin login, con `.env` en modo 0600 y servicio systemd endurecido (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`).
+- La RDS no tiene IP pública.
+- La API corre con un usuario de sistema sin login, con el `.env` en modo 0600 y un servicio systemd restringido (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`).
 - Conexión a la base con TLS (`sslmode=require`) y `JWT_SECRET` aleatorio generado en el arranque.
-- Nginx sin exponer su versión (`server_tokens off`).
 - `.gitignore` excluye secretos y artefactos.
 
 **Limitación:** el sitio se sirve por HTTP porque el laboratorio no ofrece dominio ni certificado.
-
-## Limpieza
-
-```bash
-cd ej2 && python3 destroy.py
-```
-
-Termina las instancias, borra la base de datos, los security groups, el bucket (vaciándolo antes) y el parámetro de SSM. Se puede ejecutar aunque falten recursos.
 
 ## Troubleshooting
 
@@ -195,8 +181,16 @@ Termina las instancias, borra la base de datos, los security groups, el bucket (
 | `definí la variable de entorno RDS_ADMIN_PASSWORD` | Exportar la variable antes de ejecutar. |
 | `no existe artifacts/...` | Copiar los artefactos a `ej2/artifacts/`. |
 | La web no abre justo al terminar | Esperar uno o dos minutos y usar `http://` explícito. |
-| Con una base ya creada, la contraseña no coincide | Usar la misma contraseña de la primera vez o ejecutar `destroy.py`. |
-| Aviso sobre `APP_ADMIN_PASSWORD` | Es opcional: sin ella se omite solo la prueba de login. |
+| `ya existe` / recurso duplicado al volver a ejecutar | Borrar a mano los recursos creados antes (instancias, RDS, security groups, bucket). |
+
+---
+
+# Pendientes de revisar
+
+- **Medidas de seguridad adicionales** (la letra pide aplicar las medidas de seguridad disponibles y no las detalla). Quedaron afuera y hay que revisar si corresponde sumarlas: contraseña de la base en SSM Parameter Store como `SecureString` en vez de en el user data, cifrado del bucket S3, de la RDS y de los discos de las instancias, IMDSv2 obligatorio en las EC2, bloqueo de acceso público del bucket y `server_tokens off` en Nginx.
+- **Script de limpieza.** No hay `destroy.py`; los recursos se borran a mano desde la consola. La RDS sigue corriendo con el laboratorio apagado y consume presupuesto.
+- **Re-ejecución.** `deploy.py` no reutiliza recursos existentes.
+- Confirmar con la cátedra que la base es PostgreSQL 16 (README de la app) y no MySQL.
 
 ---
 
@@ -393,7 +387,7 @@ exit 0
 
 ```python
 # config.py
-# Parámetros compartidos por deploy.py y destroy.py.
+# Parámetros del despliegue (los usa deploy.py).
 # Todo lo que hay que cambiar para otra cuenta o entorno se cambia acá.
 
 REGION = 'us-east-1'   # el Learner Lab trabaja en us-east-1
@@ -419,8 +413,6 @@ ARTEFACTOS = [
 # ---------- Contraseña de la base ----------
 # Se lee de esta variable de entorno (como en el ejercicio 9 de los Labs)
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
-# y se guarda cifrada en SSM Parameter Store (como en el ejercicio 10)
-PARAM_DB_PASSWORD = '/servicedesk/db/password'
 
 # ---------- Security groups ----------
 SG_FRONTEND = 'servicedesk-sg-frontend'
@@ -443,12 +435,6 @@ INSTANCE_PROFILE = 'LabInstanceProfile'   # perfil del rol LabRole (ejercicios 6
 AMI_PARAMETER = '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 NOMBRE_BACKEND = 'servicedesk-backend'
 NOMBRE_FRONTEND = 'servicedesk-frontend'
-
-# ---------- Verificación ----------
-# Usuario administrador que crea la app al inicializar la base (README de la app).
-# Su contraseña NO va en el código: se lee de esta variable de entorno.
-ADMIN_EMAIL = 'admin@servicedesk.local'
-VARIABLE_ADMIN_PASSWORD = 'APP_ADMIN_PASSWORD'
 ```
 
 ## ej2/deploy.py
@@ -459,14 +445,11 @@ VARIABLE_ADMIN_PASSWORD = 'APP_ADMIN_PASSWORD'
 # Despliega ServiceDesk (aplicación de tickets del Banco Centralis) en AWS usando Boto3.
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
-#   S3 guarda los artefactos y SSM Parameter Store guarda la contraseña de la base.
+#   S3 guarda los artefactos que descargan las instancias.
 #
 # Uso (desde la carpeta ej2/):
 #   export RDS_ADMIN_PASSWORD='una-contraseña-segura'
-#   export APP_ADMIN_PASSWORD='...'    # opcional: para probar el login (ver README)
 #   python3 deploy.py
-#
-# Se puede volver a ejecutar: si un recurso ya existe, lo reutiliza.
 
 import os
 import time
@@ -488,32 +471,15 @@ def paso(titulo):
 
 
 # ----------------------------------------------------------------------
-# Paso 2: contraseña de la base (ejercicios 9 y 10 de los Labs)
+# Paso 2: contraseña de la base (ejercicio 9 de los Labs)
 # ----------------------------------------------------------------------
-def guardar_password():
+def leer_password():
     paso("Contraseña de la base de datos")
     # Igual que el ejercicio 9: la contraseña NO está en el código
     password = os.environ.get(config.VARIABLE_PASSWORD)
     if not password:
         print(f"ERROR: definí la variable de entorno {config.VARIABLE_PASSWORD} (ver README)")
         exit(1)
-    if len(password) < 8:
-        print("ERROR: la contraseña debe tener al menos 8 caracteres")
-        exit(1)
-    for caracter in password:
-        if caracter in '/@"\' ':
-            print("ERROR: la contraseña no puede tener / @ comillas ni espacios")
-            exit(1)
-
-    # Igual que el ejercicio 10, pero cifrada (SecureString). La EC2 backend
-    # la lee de acá, así no viaja escrita en el user data.
-    ssm.put_parameter(
-        Name=config.PARAM_DB_PASSWORD,
-        Value=password,
-        Type='SecureString',
-        Overwrite=True
-    )
-    print(f"Contraseña guardada cifrada en SSM: {config.PARAM_DB_PASSWORD}")
     return password
 
 
@@ -528,28 +494,8 @@ def crear_bucket_y_subir_artefactos():
     except ClientError as e:
         if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
             print(f"El bucket {config.BUCKET} ya existe y es tuyo.")
-        elif e.response['Error']['Code'] == 'BucketAlreadyExists':
-            print(f"ERROR: el nombre {config.BUCKET} lo usa otra cuenta. Cambiá BUCKET en config.py")
-            exit(1)
         else:
             raise
-
-    # Seguridad: bloquear todo acceso público y cifrar los objetos
-    s3.put_public_access_block(
-        Bucket=config.BUCKET,
-        PublicAccessBlockConfiguration={
-            'BlockPublicAcls': True,
-            'IgnorePublicAcls': True,
-            'BlockPublicPolicy': True,
-            'RestrictPublicBuckets': True
-        }
-    )
-    s3.put_bucket_encryption(
-        Bucket=config.BUCKET,
-        ServerSideEncryptionConfiguration={
-            'Rules': [{'ApplyServerSideEncryptionByDefault': {'SSEAlgorithm': 'AES256'}}]
-        }
-    )
 
     for artefacto in config.ARTEFACTOS:
         ruta = config.CARPETA_ARTEFACTOS + '/' + artefacto
@@ -591,11 +537,7 @@ def agregar_regla(sg_id, puerto, origen):
     # origen es {'IpRanges': [...]} o {'UserIdGroupPairs': [...]}
     regla = {'IpProtocol': 'tcp', 'FromPort': puerto, 'ToPort': puerto}
     regla.update(origen)
-    try:
-        ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'InvalidPermission.Duplicate':
-            raise
+    ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
 
 
 def crear_security_groups():
@@ -632,7 +574,6 @@ def crear_base_de_datos(password, sg_rds):
             AllocatedStorage=config.DB_STORAGE_GB,
             VpcSecurityGroupIds=[sg_rds],
             PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
-            StorageEncrypted=True,       # disco cifrado
             BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
             Tags=config.TAGS
         )
@@ -671,24 +612,7 @@ def obtener_ami():
     return parameter['Parameter']['Value']
 
 
-def buscar_instancia(nombre):
-    # Igual que el ejercicio 8: buscar por el tag Name (solo las que están vivas)
-    instances = ec2.describe_instances(Filters=[
-        {'Name': 'tag:Name', 'Values': [nombre]},
-        {'Name': 'instance-state-name', 'Values': ['pending', 'running']}
-    ])
-    for reservation in instances['Reservations']:
-        for instance in reservation['Instances']:
-            return instance
-    return None
-
-
 def crear_instancia(nombre, image_id, sg_id, user_data):
-    existente = buscar_instancia(nombre)
-    if existente:
-        print(f"La instancia {nombre} ya existe: {existente['InstanceId']}")
-        return existente['InstanceId'], existente['PrivateIpAddress']
-
     response = ec2.run_instances(
         ImageId=image_id,
         InstanceType=config.INSTANCE_TYPE,
@@ -697,12 +621,6 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
         SecurityGroupIds=[sg_id],
         IamInstanceProfile={'Name': config.INSTANCE_PROFILE},   # permisos para S3 y SSM
         UserData=user_data,
-        # Seguridad: IMDSv2 obligatorio y disco cifrado
-        MetadataOptions={'HttpTokens': 'required', 'HttpEndpoint': 'enabled'},
-        BlockDeviceMappings=[{
-            'DeviceName': '/dev/xvda',
-            'Ebs': {'Encrypted': True, 'VolumeType': 'gp3', 'DeleteOnTermination': True}
-        }],
         TagSpecifications=[{
             'ResourceType': 'instance',
             'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
@@ -717,30 +635,17 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
 # Paso 9: comandos por SSM (ejercicios 6 y 12)
 # ----------------------------------------------------------------------
 def ejecutar_comandos(instance_id, comandos):
-    # El agente de SSM puede tardar un poco en registrarse: se reintenta
-    for intento in range(10):
-        try:
-            response = ssm.send_command(
-                InstanceIds=[instance_id],
-                DocumentName='AWS-RunShellScript',
-                Parameters={'commands': comandos}
-            )
-            break
-        except ClientError as e:
-            if e.response['Error']['Code'] != 'InvalidInstanceId' or intento == 9:
-                raise
-            time.sleep(15)
+    response = ssm.send_command(
+        InstanceIds=[instance_id],
+        DocumentName='AWS-RunShellScript',
+        Parameters={'commands': comandos}
+    )
     command_id = response['Command']['CommandId']
 
     # Igual que el ejercicio 6: preguntar hasta que termine
     while True:
         time.sleep(5)
-        try:
-            output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'InvocationDoesNotExist':
-                continue   # todavía no se registró el comando
-            raise
+        output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
         if output['Status'] in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
             break
 
@@ -778,37 +683,13 @@ def verificar_frontend(frontend_id):
     print(f"Nginx -> API responde: {salida.strip()}")
 
 
-def verificar_desde_internet(backend_id, ip_frontend):
-    # Desde la EC2 backend se entra a la IP PÚBLICA del frontend, o sea, por
-    # Internet: prueba el puerto 80, Nginx, la API y la base (el login lee usuarios)
-    paso("Verificación por la IP pública")
-    url = f"http://{ip_frontend}"
-    comandos = [
-        'set -e',
-        f"curl --fail --silent --output /dev/null {url}/ && echo 'Web: OK'",
-        f"curl --fail --silent {url}/health && echo ' <- /health'"
-    ]
-    # La contraseña del admin tampoco va en el código (igual que la de la base)
-    admin_password = os.environ.get(config.VARIABLE_ADMIN_PASSWORD)
-    if admin_password:
-        cuerpo = '{"email":"' + config.ADMIN_EMAIL + '","password":"' + admin_password + '"}'
-        comandos.append(
-            f"curl --fail --silent -X POST {url}/api/v1/auth/login -H 'Content-Type: application/json' "
-            f"-d '{cuerpo}' | grep -q accessToken && echo 'Login API: OK'"
-        )
-    else:
-        print(f"Aviso: definí {config.VARIABLE_ADMIN_PASSWORD} para probar también el login (ver README)")
-    salida = ejecutar_comandos(backend_id, comandos)
-    print(salida.strip())
-
-
 # ----------------------------------------------------------------------
 # Programa principal: el orden de los pasos
 # ----------------------------------------------------------------------
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis ({config.REGION})")
 
-    password = guardar_password()                                  # paso 2
+    password = leer_password()                                     # paso 2
     crear_bucket_y_subir_artefactos()                              # paso 3
     sg_frontend, sg_backend, sg_rds = crear_security_groups()      # paso 4
     endpoint = crear_base_de_datos(password, sg_rds)               # paso 5
@@ -821,9 +702,9 @@ def main():
     user_data_backend = armar_user_data('user_data_backend.sh', {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
-        '__PARAM_DB_PASSWORD__': config.PARAM_DB_PASSWORD,
         '__ENDPOINT_RDS__': endpoint,
         '__RDS_USER__': config.DB_USER,
+        '__RDS_PASSWORD__': password,
         '__RDS_DATABASE__': config.DB_NAME
     })
     backend_id, ip_backend = crear_instancia(config.NOMBRE_BACKEND, image_id, sg_backend, user_data_backend)
@@ -844,130 +725,13 @@ def main():
     ip_frontend = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
     print(f"IP pública del frontend: {ip_frontend}")
 
-    # Paso 9: CORS y chequeos
+    # Paso 9: CORS y chequeos (los del README de la app)
     configurar_backend(backend_id, ip_frontend)
     verificar_frontend(frontend_id)
-    verificar_desde_internet(backend_id, ip_frontend)
 
     paso("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
     print(f"Documentación: http://{ip_frontend}/docs")
-    print(f"Administrador: {config.ADMIN_EMAIL} (cambiar la contraseña después del primer ingreso)")
-
-
-if __name__ == '__main__':
-    try:
-        main()
-    except ClientError as e:
-        print(f"Error de AWS: {e}")
-        exit(1)
-```
-
-## ej2/destroy.py
-
-```python
-#!/usr/bin/env python3
-# destroy.py
-# Borra todo lo que crea deploy.py, en orden inverso a las dependencias.
-#
-# Uso (desde la carpeta ej2/):
-#   python3 destroy.py
-
-import boto3
-from botocore.exceptions import ClientError
-
-import config
-
-s3 = boto3.client('s3', region_name=config.REGION)
-ec2 = boto3.client('ec2', region_name=config.REGION)
-rds = boto3.client('rds', region_name=config.REGION)
-ssm = boto3.client('ssm', region_name=config.REGION)
-
-
-def borrar_instancias():
-    print("== EC2 ==")
-    instances = ec2.describe_instances(Filters=[
-        {'Name': 'tag:Name', 'Values': [config.NOMBRE_BACKEND, config.NOMBRE_FRONTEND]},
-        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping', 'stopped']}
-    ])
-    ids = []
-    for reservation in instances['Reservations']:
-        for instance in reservation['Instances']:
-            ids.append(instance['InstanceId'])
-    if not ids:
-        print("No hay instancias")
-        return
-    ec2.terminate_instances(InstanceIds=ids)
-    print(f"Terminando {ids}...")
-    ec2.get_waiter('instance_terminated').wait(InstanceIds=ids)
-
-
-def borrar_base_de_datos():
-    print("== RDS ==")
-    try:
-        rds.delete_db_instance(
-            DBInstanceIdentifier=config.DB_IDENTIFIER,
-            SkipFinalSnapshot=True,
-            DeleteAutomatedBackups=True
-        )
-        print(f"Borrando {config.DB_IDENTIFIER} (varios minutos)...")
-    except rds.exceptions.DBInstanceNotFoundFault:
-        print("No hay base de datos")
-        return
-    except rds.exceptions.InvalidDBInstanceStateFault:
-        print("La base ya se estaba borrando")
-    rds.get_waiter('db_instance_deleted').wait(
-        DBInstanceIdentifier=config.DB_IDENTIFIER,
-        WaiterConfig={'Delay': 30, 'MaxAttempts': 60}
-    )
-
-
-def borrar_security_groups():
-    print("== Security groups ==")
-    # Primero los que están referenciados por otros
-    for nombre in [config.SG_RDS, config.SG_BACKEND, config.SG_FRONTEND]:
-        try:
-            response = ec2.describe_security_groups(GroupNames=[nombre])
-            ec2.delete_security_group(GroupId=response['SecurityGroups'][0]['GroupId'])
-            print(f"Borrado {nombre}")
-        except ClientError as e:
-            if e.response['Error']['Code'] != 'InvalidGroup.NotFound':
-                raise
-            print(f"No existe {nombre}")
-
-
-def borrar_bucket():
-    print("== S3 ==")
-    try:
-        # Un bucket solo se puede borrar si está vacío
-        response = s3.list_objects_v2(Bucket=config.BUCKET)
-        if 'Contents' in response:
-            for obj in response['Contents']:
-                s3.delete_object(Bucket=config.BUCKET, Key=obj['Key'])
-        s3.delete_bucket(Bucket=config.BUCKET)
-        print(f"Borrado {config.BUCKET}")
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'NoSuchBucket':
-            raise
-        print("No hay bucket")
-
-
-def borrar_parametro():
-    print("== SSM ==")
-    try:
-        ssm.delete_parameter(Name=config.PARAM_DB_PASSWORD)
-        print(f"Borrado {config.PARAM_DB_PASSWORD}")
-    except ssm.exceptions.ParameterNotFound:
-        print("No hay parámetro")
-
-
-def main():
-    borrar_instancias()        # libera los security groups de frontend y backend
-    borrar_base_de_datos()     # libera el security group de la base
-    borrar_security_groups()
-    borrar_bucket()
-    borrar_parametro()
-    print("Listo: no quedan recursos de ServiceDesk")
 
 
 if __name__ == '__main__':
@@ -991,31 +755,26 @@ set -euo pipefail
 aws s3 cp "s3://__BUCKET__/servicedesk" /tmp/servicedesk --region __REGION__
 aws s3 cp "s3://__BUCKET__/docs/" /tmp/docs/ --recursive --region __REGION__
 
-# 2) Leer la contraseña de RDS desde SSM Parameter Store.
-#    Así la contraseña NO viaja escrita dentro del user data.
-rds_password=$(aws ssm get-parameter --name "__PARAM_DB_PASSWORD__" --with-decryption \
-    --query Parameter.Value --output text --region __REGION__)
-
-# 3) Usuario de sistema sin login: la API no corre como root
+# 2) Usuario de sistema sin login: la API no corre como root
 useradd --system --home /opt/servicedesk --shell /sbin/nologin servicedesk || true
 install -d -o servicedesk -g servicedesk -m 0750 /opt/servicedesk/uploads
 install -o servicedesk -g servicedesk -m 0755 /tmp/servicedesk /opt/servicedesk/servicedesk
 install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
 install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
 
-# 4) Archivo de variables: JWT aleatorio y conexión TLS a RDS.
+# 3) Archivo de variables: JWT aleatorio y conexión TLS a RDS.
 #    FRONTEND_ORIGIN queda pendiente: deploy.py lo completa por SSM cuando
 #    el frontend ya tiene IP pública.
 jwt_secret=$(openssl rand -hex 32)
 printf '%s\n' \
-    "DATABASE_URL=host=__ENDPOINT_RDS__ user=__RDS_USER__ password=${rds_password} dbname=__RDS_DATABASE__ port=5432 sslmode=require" \
+    "DATABASE_URL=host=__ENDPOINT_RDS__ user=__RDS_USER__ password=__RDS_PASSWORD__ dbname=__RDS_DATABASE__ port=5432 sslmode=require" \
     "JWT_SECRET=${jwt_secret}" \
     'PORT=8080' \
     'FRONTEND_ORIGIN=http://PENDIENTE' > /opt/servicedesk/.env
 chown servicedesk:servicedesk /opt/servicedesk/.env
 chmod 0600 /opt/servicedesk/.env
 
-# 5) Servicio systemd
+# 4) Servicio systemd
 cat > /etc/systemd/system/servicedesk.service <<'EOF'
 [Unit]
 Description=ServiceDesk API
@@ -1040,8 +799,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now servicedesk
 
-# 6) Limpieza y marca de "terminé" (el README la usa en el healthcheck pero no la crea)
-rm -rf /tmp/servicedesk /tmp/docs
+# 5) Marca de "terminé" (el README la usa en el healthcheck pero su bloque no la crea)
 touch /var/lib/servicedesk-backend-ready
 ```
 
@@ -1061,7 +819,6 @@ aws s3 cp "s3://__BUCKET__/web.tar.gz" /tmp/web.tar.gz --region __REGION__
 dnf install -y nginx
 install -d -m 0755 /var/www/servicedesk
 tar -xzf /tmp/web.tar.gz -C /var/www/servicedesk
-rm -f /tmp/web.tar.gz
 rm -f /etc/nginx/conf.d/*.conf
 
 # 3) Virtual host: sirve React y manda /api/, /health y /docs al backend PRIVADO
@@ -1072,7 +829,6 @@ server {
     root /var/www/servicedesk;
     index index.html;
     client_max_body_size 12m;
-    server_tokens off;
 
     location /api/ {
         proxy_pass http://__IP_BACKEND__:8080;

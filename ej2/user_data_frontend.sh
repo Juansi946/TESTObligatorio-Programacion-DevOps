@@ -11,7 +11,6 @@ aws s3 cp "s3://__BUCKET__/web.tar.gz" /tmp/web.tar.gz --region __REGION__
 dnf install -y nginx
 install -d -m 0755 /var/www/servicedesk
 tar -xzf /tmp/web.tar.gz -C /var/www/servicedesk
-rm -f /tmp/web.tar.gz
 rm -f /etc/nginx/conf.d/*.conf
 
 # 3) Virtual host: sirve React y manda /api/, /health y /docs al backend PRIVADO
@@ -22,7 +21,6 @@ server {
     root /var/www/servicedesk;
     index index.html;
     client_max_body_size 12m;
-    server_tokens off;
 
     location /api/ {
         proxy_pass http://__IP_BACKEND__:8080;

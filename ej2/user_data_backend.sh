@@ -8,31 +8,26 @@ set -euo pipefail
 aws s3 cp "s3://__BUCKET__/servicedesk" /tmp/servicedesk --region __REGION__
 aws s3 cp "s3://__BUCKET__/docs/" /tmp/docs/ --recursive --region __REGION__
 
-# 2) Leer la contraseña de RDS desde SSM Parameter Store.
-#    Así la contraseña NO viaja escrita dentro del user data.
-rds_password=$(aws ssm get-parameter --name "__PARAM_DB_PASSWORD__" --with-decryption \
-    --query Parameter.Value --output text --region __REGION__)
-
-# 3) Usuario de sistema sin login: la API no corre como root
+# 2) Usuario de sistema sin login: la API no corre como root
 useradd --system --home /opt/servicedesk --shell /sbin/nologin servicedesk || true
 install -d -o servicedesk -g servicedesk -m 0750 /opt/servicedesk/uploads
 install -o servicedesk -g servicedesk -m 0755 /tmp/servicedesk /opt/servicedesk/servicedesk
 install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
 install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
 
-# 4) Archivo de variables: JWT aleatorio y conexión TLS a RDS.
+# 3) Archivo de variables: JWT aleatorio y conexión TLS a RDS.
 #    FRONTEND_ORIGIN queda pendiente: deploy.py lo completa por SSM cuando
 #    el frontend ya tiene IP pública.
 jwt_secret=$(openssl rand -hex 32)
 printf '%s\n' \
-    "DATABASE_URL=host=__ENDPOINT_RDS__ user=__RDS_USER__ password=${rds_password} dbname=__RDS_DATABASE__ port=5432 sslmode=require" \
+    "DATABASE_URL=host=__ENDPOINT_RDS__ user=__RDS_USER__ password=__RDS_PASSWORD__ dbname=__RDS_DATABASE__ port=5432 sslmode=require" \
     "JWT_SECRET=${jwt_secret}" \
     'PORT=8080' \
     'FRONTEND_ORIGIN=http://PENDIENTE' > /opt/servicedesk/.env
 chown servicedesk:servicedesk /opt/servicedesk/.env
 chmod 0600 /opt/servicedesk/.env
 
-# 5) Servicio systemd
+# 4) Servicio systemd
 cat > /etc/systemd/system/servicedesk.service <<'EOF'
 [Unit]
 Description=ServiceDesk API
@@ -57,6 +52,5 @@ EOF
 systemctl daemon-reload
 systemctl enable --now servicedesk
 
-# 6) Limpieza y marca de "terminé" (el README la usa en el healthcheck pero no la crea)
-rm -rf /tmp/servicedesk /tmp/docs
+# 5) Marca de "terminé" (el README la usa en el healthcheck pero su bloque no la crea)
 touch /var/lib/servicedesk-backend-ready

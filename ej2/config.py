@@ -1,5 +1,5 @@
 # config.py
-# Parámetros compartidos por deploy.py y destroy.py.
+# Parámetros del despliegue (los usa deploy.py).
 # Todo lo que hay que cambiar para otra cuenta o entorno se cambia acá.
 
 REGION = 'us-east-1'   # el Learner Lab trabaja en us-east-1
@@ -25,8 +25,6 @@ ARTEFACTOS = [
 # ---------- Contraseña de la base ----------
 # Se lee de esta variable de entorno (como en el ejercicio 9 de los Labs)
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
-# y se guarda cifrada en SSM Parameter Store (como en el ejercicio 10)
-PARAM_DB_PASSWORD = '/servicedesk/db/password'
 
 # ---------- Security groups ----------
 SG_FRONTEND = 'servicedesk-sg-frontend'
@@ -49,9 +47,3 @@ INSTANCE_PROFILE = 'LabInstanceProfile'   # perfil del rol LabRole (ejercicios 6
 AMI_PARAMETER = '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 NOMBRE_BACKEND = 'servicedesk-backend'
 NOMBRE_FRONTEND = 'servicedesk-frontend'
-
-# ---------- Verificación ----------
-# Usuario administrador que crea la app al inicializar la base (README de la app).
-# Su contraseña NO va en el código: se lee de esta variable de entorno.
-ADMIN_EMAIL = 'admin@servicedesk.local'
-VARIABLE_ADMIN_PASSWORD = 'APP_ADMIN_PASSWORD'

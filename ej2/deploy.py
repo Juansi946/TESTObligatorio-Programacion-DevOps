@@ -3,14 +3,11 @@
 # Despliega ServiceDesk (aplicación de tickets del Banco Centralis) en AWS usando Boto3.
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
-#   S3 guarda los artefactos y SSM Parameter Store guarda la contraseña de la base.
+#   S3 guarda los artefactos que descargan las instancias.
 #
 # Uso (desde la carpeta ej2/):
 #   export RDS_ADMIN_PASSWORD='una-contraseña-segura'
-#   export APP_ADMIN_PASSWORD='...'    # opcional: para probar el login (ver README)
 #   python3 deploy.py
-#
-# Se puede volver a ejecutar: si un recurso ya existe, lo reutiliza.
 
 import os
 import time
@@ -32,32 +29,15 @@ def paso(titulo):
 
 
 # ----------------------------------------------------------------------
-# Paso 2: contraseña de la base (ejercicios 9 y 10 de los Labs)
+# Paso 2: contraseña de la base (ejercicio 9 de los Labs)
 # ----------------------------------------------------------------------
-def guardar_password():
+def leer_password():
     paso("Contraseña de la base de datos")
     # Igual que el ejercicio 9: la contraseña NO está en el código
     password = os.environ.get(config.VARIABLE_PASSWORD)
     if not password:
         print(f"ERROR: definí la variable de entorno {config.VARIABLE_PASSWORD} (ver README)")
         exit(1)
-    if len(password) < 8:
-        print("ERROR: la contraseña debe tener al menos 8 caracteres")
-        exit(1)
-    for caracter in password:
-        if caracter in '/@"\' ':
-            print("ERROR: la contraseña no puede tener / @ comillas ni espacios")
-            exit(1)
-
-    # Igual que el ejercicio 10, pero cifrada (SecureString). La EC2 backend
-    # la lee de acá, así no viaja escrita en el user data.
-    ssm.put_parameter(
-        Name=config.PARAM_DB_PASSWORD,
-        Value=password,
-        Type='SecureString',
-        Overwrite=True
-    )
-    print(f"Contraseña guardada cifrada en SSM: {config.PARAM_DB_PASSWORD}")
     return password
 
 
@@ -72,28 +52,8 @@ def crear_bucket_y_subir_artefactos():
     except ClientError as e:
         if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
             print(f"El bucket {config.BUCKET} ya existe y es tuyo.")
-        elif e.response['Error']['Code'] == 'BucketAlreadyExists':
-            print(f"ERROR: el nombre {config.BUCKET} lo usa otra cuenta. Cambiá BUCKET en config.py")
-            exit(1)
         else:
             raise
-
-    # Seguridad: bloquear todo acceso público y cifrar los objetos
-    s3.put_public_access_block(
-        Bucket=config.BUCKET,
-        PublicAccessBlockConfiguration={
-            'BlockPublicAcls': True,
-            'IgnorePublicAcls': True,
-            'BlockPublicPolicy': True,
-            'RestrictPublicBuckets': True
-        }
-    )
-    s3.put_bucket_encryption(
-        Bucket=config.BUCKET,
-        ServerSideEncryptionConfiguration={
-            'Rules': [{'ApplyServerSideEncryptionByDefault': {'SSEAlgorithm': 'AES256'}}]
-        }
-    )
 
     for artefacto in config.ARTEFACTOS:
         ruta = config.CARPETA_ARTEFACTOS + '/' + artefacto
@@ -135,11 +95,7 @@ def agregar_regla(sg_id, puerto, origen):
     # origen es {'IpRanges': [...]} o {'UserIdGroupPairs': [...]}
     regla = {'IpProtocol': 'tcp', 'FromPort': puerto, 'ToPort': puerto}
     regla.update(origen)
-    try:
-        ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'InvalidPermission.Duplicate':
-            raise
+    ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
 
 
 def crear_security_groups():
@@ -176,7 +132,6 @@ def crear_base_de_datos(password, sg_rds):
             AllocatedStorage=config.DB_STORAGE_GB,
             VpcSecurityGroupIds=[sg_rds],
             PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
-            StorageEncrypted=True,       # disco cifrado
             BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
             Tags=config.TAGS
         )
@@ -215,24 +170,7 @@ def obtener_ami():
     return parameter['Parameter']['Value']
 
 
-def buscar_instancia(nombre):
-    # Igual que el ejercicio 8: buscar por el tag Name (solo las que están vivas)
-    instances = ec2.describe_instances(Filters=[
-        {'Name': 'tag:Name', 'Values': [nombre]},
-        {'Name': 'instance-state-name', 'Values': ['pending', 'running']}
-    ])
-    for reservation in instances['Reservations']:
-        for instance in reservation['Instances']:
-            return instance
-    return None
-
-
 def crear_instancia(nombre, image_id, sg_id, user_data):
-    existente = buscar_instancia(nombre)
-    if existente:
-        print(f"La instancia {nombre} ya existe: {existente['InstanceId']}")
-        return existente['InstanceId'], existente['PrivateIpAddress']
-
     response = ec2.run_instances(
         ImageId=image_id,
         InstanceType=config.INSTANCE_TYPE,
@@ -241,12 +179,6 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
         SecurityGroupIds=[sg_id],
         IamInstanceProfile={'Name': config.INSTANCE_PROFILE},   # permisos para S3 y SSM
         UserData=user_data,
-        # Seguridad: IMDSv2 obligatorio y disco cifrado
-        MetadataOptions={'HttpTokens': 'required', 'HttpEndpoint': 'enabled'},
-        BlockDeviceMappings=[{
-            'DeviceName': '/dev/xvda',
-            'Ebs': {'Encrypted': True, 'VolumeType': 'gp3', 'DeleteOnTermination': True}
-        }],
         TagSpecifications=[{
             'ResourceType': 'instance',
             'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
@@ -261,30 +193,17 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
 # Paso 9: comandos por SSM (ejercicios 6 y 12)
 # ----------------------------------------------------------------------
 def ejecutar_comandos(instance_id, comandos):
-    # El agente de SSM puede tardar un poco en registrarse: se reintenta
-    for intento in range(10):
-        try:
-            response = ssm.send_command(
-                InstanceIds=[instance_id],
-                DocumentName='AWS-RunShellScript',
-                Parameters={'commands': comandos}
-            )
-            break
-        except ClientError as e:
-            if e.response['Error']['Code'] != 'InvalidInstanceId' or intento == 9:
-                raise
-            time.sleep(15)
+    response = ssm.send_command(
+        InstanceIds=[instance_id],
+        DocumentName='AWS-RunShellScript',
+        Parameters={'commands': comandos}
+    )
     command_id = response['Command']['CommandId']
 
     # Igual que el ejercicio 6: preguntar hasta que termine
     while True:
         time.sleep(5)
-        try:
-            output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'InvocationDoesNotExist':
-                continue   # todavía no se registró el comando
-            raise
+        output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
         if output['Status'] in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
             break
 
@@ -322,37 +241,13 @@ def verificar_frontend(frontend_id):
     print(f"Nginx -> API responde: {salida.strip()}")
 
 
-def verificar_desde_internet(backend_id, ip_frontend):
-    # Desde la EC2 backend se entra a la IP PÚBLICA del frontend, o sea, por
-    # Internet: prueba el puerto 80, Nginx, la API y la base (el login lee usuarios)
-    paso("Verificación por la IP pública")
-    url = f"http://{ip_frontend}"
-    comandos = [
-        'set -e',
-        f"curl --fail --silent --output /dev/null {url}/ && echo 'Web: OK'",
-        f"curl --fail --silent {url}/health && echo ' <- /health'"
-    ]
-    # La contraseña del admin tampoco va en el código (igual que la de la base)
-    admin_password = os.environ.get(config.VARIABLE_ADMIN_PASSWORD)
-    if admin_password:
-        cuerpo = '{"email":"' + config.ADMIN_EMAIL + '","password":"' + admin_password + '"}'
-        comandos.append(
-            f"curl --fail --silent -X POST {url}/api/v1/auth/login -H 'Content-Type: application/json' "
-            f"-d '{cuerpo}' | grep -q accessToken && echo 'Login API: OK'"
-        )
-    else:
-        print(f"Aviso: definí {config.VARIABLE_ADMIN_PASSWORD} para probar también el login (ver README)")
-    salida = ejecutar_comandos(backend_id, comandos)
-    print(salida.strip())
-
-
 # ----------------------------------------------------------------------
 # Programa principal: el orden de los pasos
 # ----------------------------------------------------------------------
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis ({config.REGION})")
 
-    password = guardar_password()                                  # paso 2
+    password = leer_password()                                     # paso 2
     crear_bucket_y_subir_artefactos()                              # paso 3
     sg_frontend, sg_backend, sg_rds = crear_security_groups()      # paso 4
     endpoint = crear_base_de_datos(password, sg_rds)               # paso 5
@@ -365,9 +260,9 @@ def main():
     user_data_backend = armar_user_data('user_data_backend.sh', {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
-        '__PARAM_DB_PASSWORD__': config.PARAM_DB_PASSWORD,
         '__ENDPOINT_RDS__': endpoint,
         '__RDS_USER__': config.DB_USER,
+        '__RDS_PASSWORD__': password,
         '__RDS_DATABASE__': config.DB_NAME
     })
     backend_id, ip_backend = crear_instancia(config.NOMBRE_BACKEND, image_id, sg_backend, user_data_backend)
@@ -388,15 +283,13 @@ def main():
     ip_frontend = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
     print(f"IP pública del frontend: {ip_frontend}")
 
-    # Paso 9: CORS y chequeos
+    # Paso 9: CORS y chequeos (los del README de la app)
     configurar_backend(backend_id, ip_frontend)
     verificar_frontend(frontend_id)
-    verificar_desde_internet(backend_id, ip_frontend)
 
     paso("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
     print(f"Documentación: http://{ip_frontend}/docs")
-    print(f"Administrador: {config.ADMIN_EMAIL} (cambiar la contraseña después del primer ingreso)")
 
 
 if __name__ == '__main__':
