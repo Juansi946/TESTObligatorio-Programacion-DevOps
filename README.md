@@ -106,27 +106,51 @@ No se abre el puerto 22: los comandos se ejecutan en las instancias por SSM.
 ## Requisitos
 
 - AWS Academy Learner Lab iniciado (región `us-east-1`, perfil `LabInstanceProfile`).
-- Python 3 y pip, Git y AWS CLI. En la familia Red Hat:
+- **Python 3.9 o superior** y **pip** (el script se ejecutó con Python 3.13 y Boto3 1.44; cualquier Boto3 reciente sirve).
+- **Boto3** (no es una librería estándar), **Git** y **AWS CLI**.
+
+Instalación en Alma Linux / familia Red Hat:
 
 ```bash
 sudo dnf install -y python3 python3-pip git
+git clone <URL-del-repositorio> && cd <carpeta-del-repositorio>
+pip install -r ej2/requirements.txt
+```
+
+Si pip se queja de un "entorno administrado externamente", agregar `--break-system-packages` o usar un entorno virtual:
+
+```bash
 python3 -m venv ~/venvs/devops && source ~/venvs/devops/bin/activate
 pip install -r ej2/requirements.txt
 ```
 
+En Ubuntu: `sudo apt install -y python3 python3-pip python3-venv git`.
+
+La AWS CLI se instala siguiendo la guía oficial: <https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html>.
+
 ## Configuración previa
 
-1. **Credenciales del lab.** En Learner Lab: *AWS Details → Show* y copiar el contenido a `~/.aws/credentials`. Cambian en cada sesión. Comprobar con `aws sts get-caller-identity`.
-2. **Nombre del bucket.** Editar `BUCKET` en `ej2/config.py`: el nombre debe ser único en todo AWS.
-3. **Artefactos de la app.** Copiar a `ej2/artifacts/` (no se suben a Git por su tamaño) los archivos del repositorio de la cátedra:
+1. **Credenciales del lab.** En Learner Lab: *AWS Details → Show* y pegar el bloque completo en `~/.aws/credentials` (la primera vez se puede usar `aws configure`). Duran unas 4 horas y cambian en cada sesión. Comprobar que funcionan:
+
+```bash
+aws sts get-caller-identity     # debe devolver UserId, Account y Arn
+```
+
+2. **Artefactos de la app.** Descargar los archivos ya compilados de los *Releases* del repositorio de la aplicación y copiarlos a `ej2/artifacts/` (esa carpeta no se sube a Git por su tamaño):
    - `servicedesk` (binario de la API)
    - `web.tar.gz` (estáticos del frontend)
    - `docs/index.html` y `docs/openapi.yaml` (documentación que sirve `/docs`)
-4. **Variable de entorno** (la contraseña no está en el código):
+
+   Si los archivos descargados se llaman distinto, ajustar la lista `ARTEFACTOS` de `ej2/config.py`.
+3. **Variable de entorno** con la contraseña de la base (no está en el código):
 
 ```bash
-export RDS_ADMIN_PASSWORD='una-contraseña-segura'   # mínimo 8 caracteres, sin / @ " ' $ ni espacios
+export RDS_ADMIN_PASSWORD='una-contraseña-segura'
 ```
+
+   Requisitos de la contraseña: mínimo 8 caracteres y sin `/` `@` `"` `'` `$` `` ` `` `\` ni espacios. El script lo comprueba antes de crear nada.
+
+No hace falta cambiar ningún nombre: el bucket, los security groups y la base llevan un sufijo aleatorio, así que no chocan con recursos existentes.
 
 ## Modo de uso
 
@@ -135,7 +159,7 @@ cd ej2
 python3 deploy.py     # tarda unos 15 minutos (la base de datos es lo más lento)
 ```
 
-Si se vuelve a ejecutar con recursos ya creados puede fallar: los recursos hay que borrarlos a mano desde la consola de AWS (ver *Pendientes de revisar*).
+Cada ejecución crea recursos nuevos con un sufijo distinto. Para empezar de cero hay que borrar a mano los anteriores desde la consola de AWS (ver *Pendientes de revisar*). Se puede ejecutar desde cualquier carpeta (`python3 ej2/deploy.py`).
 
 ## Qué hace el despliegue
 
@@ -177,9 +201,9 @@ En el navegador, abrir `http://<IP_FRONTEND>` (con `http://` explícito: no hay 
 | Síntoma | Causa y solución |
 |---|---|
 | `ExpiredToken` / `Error de AWS` | Las credenciales del lab vencieron: copiar las nuevas a `~/.aws/credentials`. |
-| `el nombre ... lo usa otra cuenta` | Cambiar `BUCKET` en `config.py`. |
 | `definí la variable de entorno RDS_ADMIN_PASSWORD` | Exportar la variable antes de ejecutar. |
-| `no existe artifacts/...` | Copiar los artefactos a `ej2/artifacts/`. |
+| `no existe .../artifacts/...` | Copiar los artefactos a `ej2/artifacts/` (ver Configuración previa). |
+| El despliegue falla a mitad de camino | Entrar a la instancia sin SSH: `aws ssm start-session --target <id-instancia>` (requiere el *Session Manager plugin* de la AWS CLI) y mirar `sudo journalctl -u servicedesk` (backend), `sudo systemctl status nginx` (frontend) y `sudo cat /var/log/cloud-init-output.log` (user data). En la sesión hay que usar `sudo`. |
 | La web no abre justo al terminar | Esperar uno o dos minutos y usar `http://` explícito. |
 | `ya existe` / recurso duplicado al volver a ejecutar | Borrar a mano los recursos creados antes (instancias, RDS, security groups, bucket). |
 
@@ -189,8 +213,10 @@ En el navegador, abrir `http://<IP_FRONTEND>` (con `http://` explícito: no hay 
 
 - **Medidas de seguridad adicionales** (la letra pide aplicar las medidas de seguridad disponibles y no las detalla). Quedaron afuera y hay que revisar si corresponde sumarlas: contraseña de la base en SSM Parameter Store como `SecureString` en vez de en el user data, cifrado del bucket S3, de la RDS y de los discos de las instancias, IMDSv2 obligatorio en las EC2, bloqueo de acceso público del bucket y `server_tokens off` en Nginx.
 - **Script de limpieza.** No hay `destroy.py`; los recursos se borran a mano desde la consola. La RDS sigue corriendo con el laboratorio apagado y consume presupuesto.
-- **Re-ejecución.** `deploy.py` no reutiliza recursos existentes.
+- **Re-ejecución.** `deploy.py` no reutiliza recursos: cada corrida crea todo de nuevo con otro sufijo. Si se ejecuta varias veces se acumulan instancias y bases.
 - Confirmar con la cátedra que la base es PostgreSQL 16 (README de la app) y no MySQL.
+- Confirmar que los nombres de los artefactos de los *Releases* coinciden con `ARTEFACTOS` en `config.py` y de dónde sale la carpeta `docs/`.
+- Probar el despliegue completo en AWS: el `EngineVersion='16'`, el `aws s3 cp` dentro del user data y los permisos de `LabRole` no se verificaron todavía.
 
 ---
 
@@ -390,6 +416,12 @@ exit 0
 # Parámetros del despliegue (los usa deploy.py).
 # Todo lo que hay que cambiar para otra cuenta o entorno se cambia acá.
 
+import secrets
+
+# Sufijo aleatorio: varios nombres de AWS no se pueden repetir (el bucket es único en
+# TODO AWS), así que cada ejecución usa un nombre distinto y no choca con nadie.
+SUFIJO = secrets.token_hex(4)
+
 REGION = 'us-east-1'   # el Learner Lab trabaja en us-east-1
 
 # Tags que se agregan a todos los recursos (identificar, filtrar, costos)
@@ -400,9 +432,9 @@ TAGS = [
 ]
 
 # ---------- S3 ----------
-# El nombre de un bucket es único en TODO AWS: cambialo por uno propio
-BUCKET = 'servicedesk-artefactos-grupo-juan-2026'
-CARPETA_ARTEFACTOS = 'artifacts'   # relativa a la carpeta ej2/ (está en .gitignore)
+# El nombre de un bucket es único en TODO AWS: por eso lleva el sufijo aleatorio
+BUCKET = f'servicedesk-artefactos-{SUFIJO}'
+CARPETA_ARTEFACTOS = 'artifacts'   # dentro de la carpeta ej2/ (está en .gitignore)
 ARTEFACTOS = [
     'servicedesk',          # binario de la API (backend)
     'web.tar.gz',           # estáticos de React (frontend)
@@ -415,12 +447,12 @@ ARTEFACTOS = [
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
 # ---------- Security groups ----------
-SG_FRONTEND = 'servicedesk-sg-frontend'
-SG_BACKEND = 'servicedesk-sg-backend'
-SG_RDS = 'servicedesk-sg-rds'
+SG_FRONTEND = f'servicedesk-sg-frontend-{SUFIJO}'
+SG_BACKEND = f'servicedesk-sg-backend-{SUFIJO}'
+SG_RDS = f'servicedesk-sg-rds-{SUFIJO}'
 
 # ---------- RDS ----------
-DB_IDENTIFIER = 'servicedesk-db'
+DB_IDENTIFIER = f'servicedesk-db-{SUFIJO}'
 DB_NAME = 'servicedesk'
 DB_USER = 'servicedesk_admin'
 DB_INSTANCE_CLASS = 'db.t3.micro'
@@ -450,6 +482,9 @@ NOMBRE_FRONTEND = 'servicedesk-frontend'
 # Uso (desde la carpeta ej2/):
 #   export RDS_ADMIN_PASSWORD='una-contraseña-segura'
 #   python3 deploy.py
+#
+# Los nombres de bucket, security groups y base llevan un sufijo aleatorio
+# (config.SUFIJO): la primera ejecución no choca con nombres ya usados.
 
 import os
 import time
@@ -458,6 +493,10 @@ import boto3
 from botocore.exceptions import ClientError
 
 import config
+
+# Carpeta donde está este script: las plantillas y los artefactos se buscan acá,
+# así funciona sin importar desde qué carpeta se ejecute.
+CARPETA = os.path.dirname(os.path.abspath(__file__))
 
 # Un cliente por servicio
 s3 = boto3.client('s3', region_name=config.REGION)
@@ -480,6 +519,16 @@ def leer_password():
     if not password:
         print(f"ERROR: definí la variable de entorno {config.VARIABLE_PASSWORD} (ver README)")
         exit(1)
+    # RDS rechaza contraseñas de menos de 8 caracteres y las que tienen / @ " o
+    # espacios. Se evitan también ' $ ` \ porque la contraseña se escribe dentro
+    # de un script de shell (user data). Se controla ahora, antes de crear nada.
+    if len(password) < 8:
+        print("ERROR: la contraseña debe tener al menos 8 caracteres")
+        exit(1)
+    for caracter in password:
+        if caracter in '/@"\' $`\\':
+            print("ERROR: la contraseña no puede tener / @ \" ' $ ` \\ ni espacios")
+            exit(1)
     return password
 
 
@@ -488,17 +537,11 @@ def leer_password():
 # ----------------------------------------------------------------------
 def crear_bucket_y_subir_artefactos():
     paso("S3: bucket y artefactos")
-    try:
-        s3.create_bucket(Bucket=config.BUCKET)
-        print(f"Bucket creado: {config.BUCKET}")
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
-            print(f"El bucket {config.BUCKET} ya existe y es tuyo.")
-        else:
-            raise
+    s3.create_bucket(Bucket=config.BUCKET)
+    print(f"Bucket creado: {config.BUCKET}")
 
     for artefacto in config.ARTEFACTOS:
-        ruta = config.CARPETA_ARTEFACTOS + '/' + artefacto
+        ruta = os.path.join(CARPETA, config.CARPETA_ARTEFACTOS, artefacto)
         try:
             # upload_file(archivo local, bucket, nombre del objeto en S3)
             s3.upload_file(ruta, config.BUCKET, artefacto)
@@ -512,24 +555,16 @@ def crear_bucket_y_subir_artefactos():
 # Paso 4: security groups (ejercicio 8 y Ejemplos/sg.py)
 # ----------------------------------------------------------------------
 def crear_security_group(nombre, descripcion):
-    try:
-        response = ec2.create_security_group(
-            GroupName=nombre,
-            Description=descripcion,
-            TagSpecifications=[{
-                'ResourceType': 'security-group',
-                'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
-            }]
-        )
-        sg_id = response['GroupId']
-        print(f"Security group creado: {nombre} ({sg_id})")
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
-            response = ec2.describe_security_groups(GroupNames=[nombre])
-            sg_id = response['SecurityGroups'][0]['GroupId']
-            print(f"Security group ya existe: {nombre} ({sg_id})")
-        else:
-            raise
+    response = ec2.create_security_group(
+        GroupName=nombre,
+        Description=descripcion,
+        TagSpecifications=[{
+            'ResourceType': 'security-group',
+            'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
+        }]
+    )
+    sg_id = response['GroupId']
+    print(f"Security group creado: {nombre} ({sg_id})")
     return sg_id
 
 
@@ -562,24 +597,21 @@ def crear_security_groups():
 # ----------------------------------------------------------------------
 def crear_base_de_datos(password, sg_rds):
     paso("RDS PostgreSQL")
-    try:
-        rds.create_db_instance(
-            DBInstanceIdentifier=config.DB_IDENTIFIER,
-            DBInstanceClass=config.DB_INSTANCE_CLASS,
-            Engine=config.DB_ENGINE,
-            EngineVersion=config.DB_ENGINE_VERSION,
-            DBName=config.DB_NAME,
-            MasterUsername=config.DB_USER,
-            MasterUserPassword=password,
-            AllocatedStorage=config.DB_STORAGE_GB,
-            VpcSecurityGroupIds=[sg_rds],
-            PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
-            BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
-            Tags=config.TAGS
-        )
-        print(f"Creando la base {config.DB_IDENTIFIER}...")
-    except rds.exceptions.DBInstanceAlreadyExistsFault:
-        print(f"La base {config.DB_IDENTIFIER} ya existe.")
+    rds.create_db_instance(
+        DBInstanceIdentifier=config.DB_IDENTIFIER,
+        DBInstanceClass=config.DB_INSTANCE_CLASS,
+        Engine=config.DB_ENGINE,
+        EngineVersion=config.DB_ENGINE_VERSION,
+        DBName=config.DB_NAME,
+        MasterUsername=config.DB_USER,
+        MasterUserPassword=password,
+        AllocatedStorage=config.DB_STORAGE_GB,
+        VpcSecurityGroupIds=[sg_rds],
+        PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
+        BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
+        Tags=config.TAGS
+    )
+    print(f"Creando la base {config.DB_IDENTIFIER}...")
 
     print("Esperando a que la base esté disponible (5 a 10 minutos)...")
     rds.get_waiter('db_instance_available').wait(
@@ -699,7 +731,7 @@ def main():
     print(f"AMI obtenida desde SSM: {image_id}")
 
     # Pasos 6 y 7: primero el backend, porque el frontend necesita su IP privada
-    user_data_backend = armar_user_data('user_data_backend.sh', {
+    user_data_backend = armar_user_data(os.path.join(CARPETA, 'user_data_backend.sh'), {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
         '__ENDPOINT_RDS__': endpoint,
@@ -711,7 +743,7 @@ def main():
     print(f"IP privada del backend: {ip_backend}")
 
     # Pasos 6 y 8: el frontend, con la IP privada del backend
-    user_data_frontend = armar_user_data('user_data_frontend.sh', {
+    user_data_frontend = armar_user_data(os.path.join(CARPETA, 'user_data_frontend.sh'), {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
         '__IP_BACKEND__': ip_backend

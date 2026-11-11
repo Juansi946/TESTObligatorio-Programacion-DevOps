@@ -2,6 +2,12 @@
 # Parámetros del despliegue (los usa deploy.py).
 # Todo lo que hay que cambiar para otra cuenta o entorno se cambia acá.
 
+import secrets
+
+# Sufijo aleatorio: varios nombres de AWS no se pueden repetir (el bucket es único en
+# TODO AWS), así que cada ejecución usa un nombre distinto y no choca con nadie.
+SUFIJO = secrets.token_hex(4)
+
 REGION = 'us-east-1'   # el Learner Lab trabaja en us-east-1
 
 # Tags que se agregan a todos los recursos (identificar, filtrar, costos)
@@ -12,9 +18,9 @@ TAGS = [
 ]
 
 # ---------- S3 ----------
-# El nombre de un bucket es único en TODO AWS: cambialo por uno propio
-BUCKET = 'servicedesk-artefactos-grupo-juan-2026'
-CARPETA_ARTEFACTOS = 'artifacts'   # relativa a la carpeta ej2/ (está en .gitignore)
+# El nombre de un bucket es único en TODO AWS: por eso lleva el sufijo aleatorio
+BUCKET = f'servicedesk-artefactos-{SUFIJO}'
+CARPETA_ARTEFACTOS = 'artifacts'   # dentro de la carpeta ej2/ (está en .gitignore)
 ARTEFACTOS = [
     'servicedesk',          # binario de la API (backend)
     'web.tar.gz',           # estáticos de React (frontend)
@@ -27,12 +33,12 @@ ARTEFACTOS = [
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
 # ---------- Security groups ----------
-SG_FRONTEND = 'servicedesk-sg-frontend'
-SG_BACKEND = 'servicedesk-sg-backend'
-SG_RDS = 'servicedesk-sg-rds'
+SG_FRONTEND = f'servicedesk-sg-frontend-{SUFIJO}'
+SG_BACKEND = f'servicedesk-sg-backend-{SUFIJO}'
+SG_RDS = f'servicedesk-sg-rds-{SUFIJO}'
 
 # ---------- RDS ----------
-DB_IDENTIFIER = 'servicedesk-db'
+DB_IDENTIFIER = f'servicedesk-db-{SUFIJO}'
 DB_NAME = 'servicedesk'
 DB_USER = 'servicedesk_admin'
 DB_INSTANCE_CLASS = 'db.t3.micro'

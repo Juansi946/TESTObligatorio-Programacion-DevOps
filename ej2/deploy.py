@@ -8,6 +8,9 @@
 # Uso (desde la carpeta ej2/):
 #   export RDS_ADMIN_PASSWORD='una-contraseña-segura'
 #   python3 deploy.py
+#
+# Los nombres de bucket, security groups y base llevan un sufijo aleatorio
+# (config.SUFIJO): la primera ejecución no choca con nombres ya usados.
 
 import os
 import time
@@ -16,6 +19,10 @@ import boto3
 from botocore.exceptions import ClientError
 
 import config
+
+# Carpeta donde está este script: las plantillas y los artefactos se buscan acá,
+# así funciona sin importar desde qué carpeta se ejecute.
+CARPETA = os.path.dirname(os.path.abspath(__file__))
 
 # Un cliente por servicio
 s3 = boto3.client('s3', region_name=config.REGION)
@@ -38,6 +45,16 @@ def leer_password():
     if not password:
         print(f"ERROR: definí la variable de entorno {config.VARIABLE_PASSWORD} (ver README)")
         exit(1)
+    # RDS rechaza contraseñas de menos de 8 caracteres y las que tienen / @ " o
+    # espacios. Se evitan también ' $ ` \ porque la contraseña se escribe dentro
+    # de un script de shell (user data). Se controla ahora, antes de crear nada.
+    if len(password) < 8:
+        print("ERROR: la contraseña debe tener al menos 8 caracteres")
+        exit(1)
+    for caracter in password:
+        if caracter in '/@"\' $`\\':
+            print("ERROR: la contraseña no puede tener / @ \" ' $ ` \\ ni espacios")
+            exit(1)
     return password
 
 
@@ -46,17 +63,11 @@ def leer_password():
 # ----------------------------------------------------------------------
 def crear_bucket_y_subir_artefactos():
     paso("S3: bucket y artefactos")
-    try:
-        s3.create_bucket(Bucket=config.BUCKET)
-        print(f"Bucket creado: {config.BUCKET}")
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
-            print(f"El bucket {config.BUCKET} ya existe y es tuyo.")
-        else:
-            raise
+    s3.create_bucket(Bucket=config.BUCKET)
+    print(f"Bucket creado: {config.BUCKET}")
 
     for artefacto in config.ARTEFACTOS:
-        ruta = config.CARPETA_ARTEFACTOS + '/' + artefacto
+        ruta = os.path.join(CARPETA, config.CARPETA_ARTEFACTOS, artefacto)
         try:
             # upload_file(archivo local, bucket, nombre del objeto en S3)
             s3.upload_file(ruta, config.BUCKET, artefacto)
@@ -70,24 +81,16 @@ def crear_bucket_y_subir_artefactos():
 # Paso 4: security groups (ejercicio 8 y Ejemplos/sg.py)
 # ----------------------------------------------------------------------
 def crear_security_group(nombre, descripcion):
-    try:
-        response = ec2.create_security_group(
-            GroupName=nombre,
-            Description=descripcion,
-            TagSpecifications=[{
-                'ResourceType': 'security-group',
-                'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
-            }]
-        )
-        sg_id = response['GroupId']
-        print(f"Security group creado: {nombre} ({sg_id})")
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
-            response = ec2.describe_security_groups(GroupNames=[nombre])
-            sg_id = response['SecurityGroups'][0]['GroupId']
-            print(f"Security group ya existe: {nombre} ({sg_id})")
-        else:
-            raise
+    response = ec2.create_security_group(
+        GroupName=nombre,
+        Description=descripcion,
+        TagSpecifications=[{
+            'ResourceType': 'security-group',
+            'Tags': [{'Key': 'Name', 'Value': nombre}] + config.TAGS
+        }]
+    )
+    sg_id = response['GroupId']
+    print(f"Security group creado: {nombre} ({sg_id})")
     return sg_id
 
 
@@ -120,24 +123,21 @@ def crear_security_groups():
 # ----------------------------------------------------------------------
 def crear_base_de_datos(password, sg_rds):
     paso("RDS PostgreSQL")
-    try:
-        rds.create_db_instance(
-            DBInstanceIdentifier=config.DB_IDENTIFIER,
-            DBInstanceClass=config.DB_INSTANCE_CLASS,
-            Engine=config.DB_ENGINE,
-            EngineVersion=config.DB_ENGINE_VERSION,
-            DBName=config.DB_NAME,
-            MasterUsername=config.DB_USER,
-            MasterUserPassword=password,
-            AllocatedStorage=config.DB_STORAGE_GB,
-            VpcSecurityGroupIds=[sg_rds],
-            PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
-            BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
-            Tags=config.TAGS
-        )
-        print(f"Creando la base {config.DB_IDENTIFIER}...")
-    except rds.exceptions.DBInstanceAlreadyExistsFault:
-        print(f"La base {config.DB_IDENTIFIER} ya existe.")
+    rds.create_db_instance(
+        DBInstanceIdentifier=config.DB_IDENTIFIER,
+        DBInstanceClass=config.DB_INSTANCE_CLASS,
+        Engine=config.DB_ENGINE,
+        EngineVersion=config.DB_ENGINE_VERSION,
+        DBName=config.DB_NAME,
+        MasterUsername=config.DB_USER,
+        MasterUserPassword=password,
+        AllocatedStorage=config.DB_STORAGE_GB,
+        VpcSecurityGroupIds=[sg_rds],
+        PubliclyAccessible=False,    # sin IP pública: solo se llega desde la VPC
+        BackupRetentionPeriod=0,     # igual que el ejercicio 9 (sin backups automáticos en el lab)
+        Tags=config.TAGS
+    )
+    print(f"Creando la base {config.DB_IDENTIFIER}...")
 
     print("Esperando a que la base esté disponible (5 a 10 minutos)...")
     rds.get_waiter('db_instance_available').wait(
@@ -257,7 +257,7 @@ def main():
     print(f"AMI obtenida desde SSM: {image_id}")
 
     # Pasos 6 y 7: primero el backend, porque el frontend necesita su IP privada
-    user_data_backend = armar_user_data('user_data_backend.sh', {
+    user_data_backend = armar_user_data(os.path.join(CARPETA, 'user_data_backend.sh'), {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
         '__ENDPOINT_RDS__': endpoint,
@@ -269,7 +269,7 @@ def main():
     print(f"IP privada del backend: {ip_backend}")
 
     # Pasos 6 y 8: el frontend, con la IP privada del backend
-    user_data_frontend = armar_user_data('user_data_frontend.sh', {
+    user_data_frontend = armar_user_data(os.path.join(CARPETA, 'user_data_frontend.sh'), {
         '__BUCKET__': config.BUCKET,
         '__REGION__': config.REGION,
         '__IP_BACKEND__': ip_backend
