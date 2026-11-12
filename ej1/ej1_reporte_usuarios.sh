@@ -6,7 +6,7 @@
 # Por cada usuario muestra, separados por tabulador:
 #   nombre  UID  home  shell  home_existe(SI/NO)  es_propietario(SI/NO)
 #
-# Modificadores (se pueden combinar y pasar en cualquier orden):
+# Modificadores (se pueden combinar, juntos o separados, en cualquier orden):
 #   -t  considerar todos los usuarios (también los de UID < 1000)
 #   -s  listar solo los usuarios cuya shell de login es /bin/bash
 #   -f  listar solo los usuarios cuyo home existe y es un directorio
@@ -51,21 +51,27 @@ solo_home=0      # 1 si vino -f
 usuario=""       # vacío = analizar todos los usuarios
 
 # ---------- Procesar los modificadores ----------
-# Mientras el primer parámetro sea un modificador, se procesa y se "tacha"
-# con shift. Al primer parámetro que no empieza con "-" se sale del while:
-# ese tiene que ser el usuario.
-while [ $# -gt 0 ]
+# getopts recorre los modificadores en cualquier orden y acepta tanto
+# "-t -s" como "-ts". El ":" inicial de ":tsf" hace que getopts no imprima
+# sus propios errores: ante un modificador desconocido devuelve "?" y deja
+# la letra en $OPTARG, así el mensaje lo arma el script.
+# getopts se detiene en el primer parámetro que no empieza con "-": ese
+# tiene que ser el usuario.
+while getopts ":tsf" modificador
 do
-    case "$1" in
-        -t) todos=1 ;;
-        -s) solo_bash=1 ;;
-        -f) solo_home=1 ;;
-        -*) echo "Error: modificador inválido '$1'. $SINTAXIS" >&2
-            exit 1 ;;
-        *)  break ;;
+    case $modificador in
+        t) todos=1 ;;
+        s) solo_bash=1 ;;
+        f) solo_home=1 ;;
+        *) echo "Error: modificador inválido '-$OPTARG'. $SINTAXIS" >&2
+           exit 1 ;;
     esac
-    shift
 done
+
+# OPTIND quedó apuntando al primer parámetro que no es modificador.
+# Con shift se descartan los modificadores ya procesados, así el usuario
+# (si vino) queda en $1.
+shift $((OPTIND - 1))
 
 # Recién ahora se cuentan los parámetros: lo único que puede quedar es el usuario
 if [ $# -gt 1 ]

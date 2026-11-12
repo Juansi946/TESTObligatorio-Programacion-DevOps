@@ -53,7 +53,7 @@ chmod +x ej1/ej1_reporte_usuarios.sh
 | `-f` | Lista solo los usuarios cuyo home existe y es un directorio. |
 | `Usuario` | Analiza únicamente a ese usuario. |
 
-Los modificadores se pueden combinar y pasar en cualquier orden, siempre antes del nombre de usuario.
+Los modificadores se pueden combinar y pasar en cualquier orden, separados (`-t -s`) o juntos (`-ts`), siempre antes del nombre de usuario. Se procesan con `getopts`.
 
 Ejemplos:
 
