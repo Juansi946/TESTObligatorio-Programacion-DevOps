@@ -72,9 +72,10 @@ Ejemplos:
 | 2 | Cantidad de parámetros incorrecta |
 | 3 | El nombre de usuario recibido es vacío |
 | 4 | `/etc/passwd` no existe |
-| 5 | No hay permiso de lectura sobre `/etc/passwd` |
-| 6 | El usuario recibido no existe |
-| 7 | `/etc/passwd` tiene una línea con un UID que no es un número |
+| 5 | `/etc/passwd` no es un archivo regular |
+| 6 | No hay permiso de lectura sobre `/etc/passwd` |
+| 7 | El usuario recibido no existe |
+| 8 | `/etc/passwd` tiene una línea con un UID que no es un número |
 
 ## Captura de una ejecución exitosa
 

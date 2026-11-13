@@ -17,9 +17,10 @@
 #   2  cantidad de parámetros incorrecta
 #   3  el nombre de usuario recibido es vacío
 #   4  el archivo /etc/passwd no existe
-#   5  no hay permiso de lectura sobre /etc/passwd
-#   6  el usuario recibido no existe
-#   7  /etc/passwd tiene una línea con un UID que no es un número
+#   5  /etc/passwd no es un archivo regular
+#   6  no hay permiso de lectura sobre /etc/passwd
+#   7  el usuario recibido no existe
+#   8  /etc/passwd tiene una línea con un UID que no es un número
 
 # ---------- Constantes ----------
 PASSWD=/etc/passwd
@@ -97,17 +98,24 @@ then
     exit 4
 fi
 
+# Existe, pero tiene que ser un archivo regular (no un directorio, etc.)
+if [ ! -f "$PASSWD" ]
+then
+    echo "Error: $PASSWD no es un archivo regular" >&2
+    exit 5
+fi
+
 if [ ! -r "$PASSWD" ]
 then
     echo "Error: no hay permiso de lectura sobre $PASSWD" >&2
-    exit 5
+    exit 6
 fi
 
 # ---------- Validar que el usuario exista ----------
 if [ -n "$usuario" ] && ! usuario_existe "$usuario"
 then
     echo "Error: el usuario '$usuario' no existe" >&2
-    exit 6
+    exit 7
 fi
 
 # ---------- Recorrer los usuarios ----------
@@ -125,7 +133,7 @@ do
     if ! echo "$uid" | grep -q "^[0-9][0-9]*$"
     then
         echo "Error: el UID '$uid' del usuario '$nombre' en $PASSWD no es un número" >&2
-        exit 7
+        exit 8
     fi
 
     # Filtro 1: si se pidió un usuario, se saltean todos los demás
