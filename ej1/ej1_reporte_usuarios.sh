@@ -111,6 +111,16 @@ then
     exit 6
 fi
 
+# Antes de imprimir nada se revisa que todos los UID sean números, así un
+# archivo corrupto no deja una salida a medias. Se ignoran las líneas
+# vacías; de las demás se toma el campo 3 (UID) y grep -qv busca alguno que
+# NO sea solo dígitos (un UID vacío también cuenta como inválido).
+if grep -v "^$" "$PASSWD" | cut -d: -f3 | grep -qv "^[0-9][0-9]*$"
+then
+    echo "Error: $PASSWD tiene al menos una línea con un UID que no es un número" >&2
+    exit 8
+fi
+
 # ---------- Validar que el usuario exista ----------
 if [ -n "$usuario" ] && ! usuario_existe "$usuario"
 then
@@ -129,12 +139,6 @@ do
     uid=$(echo "$linea" | cut -d: -f2)
     home=$(echo "$linea" | cut -d: -f3)
     shell=$(echo "$linea" | cut -d: -f4)
-
-    if ! echo "$uid" | grep -q "^[0-9][0-9]*$"
-    then
-        echo "Error: el UID '$uid' del usuario '$nombre' en $PASSWD no es un número" >&2
-        exit 8
-    fi
 
     # Filtro 1: si se pidió un usuario, se saltean todos los demás
     if [ -n "$usuario" ] && [ "$nombre" != "$usuario" ]
