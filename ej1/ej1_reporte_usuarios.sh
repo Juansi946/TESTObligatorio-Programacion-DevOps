@@ -164,10 +164,14 @@ do
     if [ -d "$home" ]
     then
         home_ok=SI
-        # find con -maxdepth 0 mira solo el propio directorio (no entra);
-        # -user lo muestra solo si su dueño es el usuario. Si no muestra
-        # nada, el usuario no es el propietario.
-        if [ -n "$(find "$home" -maxdepth 0 -user "$nombre" 2>/dev/null)" ]
+        # stat -c %u devuelve el UID del dueño del directorio y se compara
+        # con el UID del usuario leído de /etc/passwd. Se compara el número
+        # y no el nombre porque Linux registra al dueño por UID: si dos
+        # usuarios comparten UID, el nombre que muestra ls sería el de
+        # otro. -L hace que stat siga los enlaces simbólicos, igual que
+        # [ -d ], para mirar el dueño del directorio real y no del enlace.
+        dueno_uid=$(stat -L -c %u "$home" 2>/dev/null)
+        if [ "$dueno_uid" = "$uid" ]
         then
             propietario=SI
         fi
