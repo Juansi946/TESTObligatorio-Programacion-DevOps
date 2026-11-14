@@ -441,7 +441,7 @@ curl http://<IP_PUBLICA>/health      # {"status":"ok"}
 
 Límites conocidos:
 
-- **Sin HTTPS.** El laboratorio no ofrece dominio ni certificado, y la cátedra indicó que no hace falta (clase 21).
+- **Sin HTTPS.** El laboratorio no ofrece dominio ni certificado, y la cátedra indicó que no hace falta.
 - **La contraseña de la base viaja en el *user data* del backend**, igual que en el diseño del README de la aplicación. No está en el código ni en el repositorio, pero alguien con acceso a la consola de esa cuenta de AWS podría verla en la configuración de la instancia.
 - **Usuarios demo.** La aplicación crea usuarios de prueba con la contraseña `admin123` y su API no tiene una forma de cambiarla. Es parte de la aplicación entregada.
 
@@ -718,31 +718,16 @@ exit 0
 
 ```python
 #!/usr/bin/env python3
-# ======================================================================
-# deploy.py - Ejercicio 2 del obligatorio de Programación para DevOps
-# ======================================================================
-# Despliego en AWS, con Boto3, la aplicación de tickets del Banco Centralis
-# (ServiceDesk). La app tiene tres capas y cada una va en su propio recurso:
+# deploy.py
+# Despliega ServiceDesk (la app de tickets del Banco Centralis) en AWS con Boto3.
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
 #
-# El binario de la API pesa unos 23 MB y el user data tiene un límite de 16 KB,
-# así que los archivos de la app los subo a un bucket S3 y cada instancia se
-# los descarga al arrancar.
+# Los archivos de la app van a un bucket S3 y cada instancia los descarga al arrancar.
 #
-# El orden de los pasos importa: cada uno necesita algo que crea el anterior.
-#   1. Contraseña de la base   la valido antes de crear cualquier recurso
-#   2. Bucket S3               las instancias descargan de acá los artefactos
-#   3. Security groups         van antes de las instancias para pasarlos al crearlas
-#   4. Base de datos RDS       el backend necesita su endpoint
-#   5. EC2 backend             el frontend necesita su IP privada
-#   6. EC2 frontend            el backend necesita su IP pública (CORS)
-#   7. Ajuste final y chequeos por SSM
-#
-# Uso (los detalles están en el README):
+# Uso:
 #   python3 ej2/deploy.py
-# La contraseña de la base se toma de la variable de entorno RDS_ADMIN_PASSWORD
-# y, si no está definida, el script la pide por teclado.
+# La contraseña de la base sale de RDS_ADMIN_PASSWORD o, si no está, se pide por teclado.
 
 import getpass
 import os
@@ -753,21 +738,15 @@ import boto3
 from botocore.exceptions import ClientError
 
 
-# ======================================================================
 # Configuración
-# ======================================================================
-# Dejo todos los valores juntos acá arriba, como en los ejemplos de clase:
-# si hay que cambiar algo (región, tamaños, nombres) se cambia solo acá.
+# Todo lo que se puede ajustar está acá.
 
-REGION = 'us-east-1'                  # el Learner Lab trabaja en us-east-1
+REGION = 'us-east-1'
 
-# Algunos nombres no se pueden repetir: el del bucket es único en todo AWS y
-# los de los security groups y la base, dentro de la cuenta. Les agrego un
-# sufijo aleatorio (lo sugirió el profe en la clase 21) para que la primera
-# ejecución no choque con nada que ya exista, ni en mi cuenta ni en otra.
-SUFIJO = secrets.token_hex(4)         # 8 caracteres hexadecimales, por ejemplo 3f9a1c0b
+# Sufijo aleatorio para que los nombres no choquen con recursos que ya existan
+SUFIJO = secrets.token_hex(4)
 
-# Tags que pongo en todos los recursos para identificarlos y filtrarlos
+# Tags que llevan todos los recursos
 TAGS = [
     {'Key': 'Proyecto', 'Value': 'obligatorio-devops'},
     {'Key': 'Cliente', 'Value': 'banco-centralis'},
@@ -775,42 +754,40 @@ TAGS = [
     {'Key': 'Despliegue', 'Value': SUFIJO},
 ]
 
-# ---------- Contraseña de la base ----------
-VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'   # variable de entorno donde la busco
+# Contraseña de la base
+VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
-# ---------- S3 ----------
+# S3
 BUCKET = f'servicedesk-artefactos-{SUFIJO}'
-# Busco los archivos a partir de la carpeta donde está este script, así
-# funciona aunque se ejecute desde otra carpeta (por ejemplo, la raíz del repo).
+# Rutas armadas desde la carpeta del script, así anda desde cualquier lado
 CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
 CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, 'artifacts')
 ARTEFACTOS = [
-    'servicedesk',           # binario de la API (backend)
-    'web.tar.gz',            # archivos estáticos de React (frontend)
-    'docs/index.html',       # página que muestra la documentación en /docs
-    'docs/openapi.yaml',     # especificación de la API que lee esa página
+    'servicedesk',           # binario de la API
+    'web.tar.gz',            # frontend de React
+    'docs/index.html',       # documentación que se ve en /docs
+    'docs/openapi.yaml',
 ]
 
-# ---------- Security groups (uno por capa) ----------
+# Security groups
 SG_FRONTEND = f'servicedesk-sg-frontend-{SUFIJO}'
 SG_BACKEND = f'servicedesk-sg-backend-{SUFIJO}'
 SG_RDS = f'servicedesk-sg-rds-{SUFIJO}'
 
-# ---------- RDS ----------
+# RDS
 DB_IDENTIFIER = f'servicedesk-db-{SUFIJO}'
 DB_NAME = 'servicedesk'
 DB_USER = 'servicedesk_admin'
 DB_INSTANCE_CLASS = 'db.t3.micro'
 DB_ENGINE = 'postgres'
-DB_ENGINE_VERSION = '16'              # el README de la app pide PostgreSQL 16
+DB_ENGINE_VERSION = '16'              # la app pide PostgreSQL 16
 DB_STORAGE_GB = 20
 
-# ---------- EC2 ----------
+# EC2
 INSTANCE_TYPE = 't3.micro'
-# Perfil del rol LabRole. Sin él la instancia no aparece en SSM ni puede
-# leer el bucket (clase 21, ejercicios 6 y 12).
+# Le da permiso a la instancia para usar SSM y leer el bucket
 INSTANCE_PROFILE = 'LabInstanceProfile'
-# Parámetro público con la última AMI de Amazon Linux 2023 (ejercicio 12)
+# Parámetro público de AWS con la última AMI de Amazon Linux 2023
 AMI_PARAMETER = '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 NOMBRE_BACKEND = f'servicedesk-backend-{SUFIJO}'
 NOMBRE_FRONTEND = f'servicedesk-frontend-{SUFIJO}'
@@ -818,11 +795,7 @@ PLANTILLA_BACKEND = os.path.join(CARPETA_SCRIPT, 'user_data_backend.sh')
 PLANTILLA_FRONTEND = os.path.join(CARPETA_SCRIPT, 'user_data_frontend.sh')
 
 
-# ======================================================================
-# Clientes de AWS
-# ======================================================================
-# Un cliente por servicio, con el nombre del servicio (clase 20). Les paso la
-# región para no depender de cómo tenga configurada la AWS CLI quien lo ejecute.
+# Clientes de AWS, uno por servicio
 s3 = boto3.client('s3', region_name=REGION)
 ec2 = boto3.client('ec2', region_name=REGION)
 rds = boto3.client('rds', region_name=REGION)
@@ -830,27 +803,20 @@ ssm = boto3.client('ssm', region_name=REGION)
 
 
 def titulo(texto):
-    # Imprime un encabezado para seguir en pantalla por qué paso va el despliegue
+    # Encabezado para ver en pantalla en qué paso va
     print(f"\n=== {texto} ===")
 
 
-# ======================================================================
 # Paso 1: contraseña de la base de datos
-# ======================================================================
 def leer_password():
-    # La contraseña nunca va escrita en el código. Primero la busco en una
-    # variable de entorno, como en el ejercicio 9 de los Labs. Si no está,
-    # la pido con getpass, que no la muestra en pantalla mientras se escribe
-    # (las dos opciones las nombró el profe en la clase 21).
+    # La busco en la variable de entorno; si no está, la pido sin mostrarla
     password = os.environ.get(VARIABLE_PASSWORD)
     if not password:
         password = getpass.getpass("Contraseña para la base de datos: ")
 
-    # La valido ahora, antes de crear nada: si RDS la rechaza recién en el
-    # paso 4, ya habrían quedado creados el bucket y los security groups.
-    # RDS pide al menos 8 caracteres y no acepta / @ " ni espacios. Además
-    # descarto ' $ ` \ porque la contraseña termina escrita dentro de un
-    # script de bash (el user data del backend) y ahí esos caracteres la romperían.
+    # La valido antes de crear nada, para no dejar recursos a medias.
+    # RDS pide 8 caracteres o más y no acepta / @ " ni espacios.
+    # ' $ ` \ tampoco, porque rompen el script de bash donde se escribe.
     if len(password) < 8:
         print("ERROR: la contraseña tiene que tener al menos 8 caracteres")
         exit(1)
@@ -862,22 +828,16 @@ def leer_password():
     return password
 
 
-# ======================================================================
-# Paso 2: bucket S3 con los artefactos de la app
-# ======================================================================
+# Paso 2: bucket S3 con los artefactos
 def crear_bucket_y_subir_artefactos():
-    # Igual que el ejercicio 1 de los Labs: creo el bucket y subo cada archivo
-    # con upload_file(archivo local, bucket, nombre del objeto en S3).
-    # El bucket queda privado: S3 bloquea el acceso público por defecto y las
-    # instancias lo leen con los permisos de LabInstanceProfile.
+    # El bucket queda privado; las instancias lo leen con LabInstanceProfile
     s3.create_bucket(Bucket=BUCKET)
     print(f"Bucket creado: {BUCKET}")
 
     for artefacto in ARTEFACTOS:
         ruta = os.path.join(CARPETA_ARTEFACTOS, artefacto)
         try:
-            # Uso la misma ruta como nombre del objeto, así docs/ queda como
-            # "carpeta" en S3 y el backend la descarga entera con un solo comando
+            # El nombre en S3 es la misma ruta, así docs/ queda como carpeta
             s3.upload_file(ruta, BUCKET, artefacto)
             print(f"Subido: {artefacto}")
         except FileNotFoundError:
@@ -885,12 +845,9 @@ def crear_bucket_y_subir_artefactos():
             exit(1)
 
 
-# ======================================================================
-# Paso 3: security groups encadenados
-# ======================================================================
+# Paso 3: security groups
 def crear_security_group(nombre, descripcion):
-    # Igual que el ejercicio 8: Description es obligatoria. No paso VpcId, así
-    # que el grupo se crea en la VPC por defecto, la misma que usan EC2 y RDS.
+    # Sin VpcId se crea en la VPC por defecto, la misma que usan EC2 y RDS
     response = ec2.create_security_group(
         GroupName=nombre,
         Description=descripcion,
@@ -905,57 +862,50 @@ def crear_security_group(nombre, descripcion):
 
 
 def agregar_regla(sg_id, puerto, origen):
-    # Un grupo recién creado es una "caja vacía" que no deja entrar nada.
-    # Cada regla abre UN solo puerto TCP (FromPort y ToPort iguales).
-    # origen es {'IpRanges': [...]} para permitir rangos de IP, o
-    # {'UserIdGroupPairs': [...]} para permitir solo a otro security group.
+    # Abre un solo puerto TCP. origen puede ser un rango de IP (IpRanges)
+    # o otro security group (UserIdGroupPairs).
     regla = {'IpProtocol': 'tcp', 'FromPort': puerto, 'ToPort': puerto}
     regla.update(origen)
     ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
 
 
 def crear_security_groups():
-    # Tres grupos, uno por capa (clase 21). Solo el frontend queda expuesto a
-    # Internet; cada capa de atrás acepta tráfico únicamente de la anterior.
+    # Uno por capa. Solo el frontend recibe tráfico de Internet.
     sg_frontend = crear_security_group(SG_FRONTEND, 'HTTP publico hacia Nginx')
     sg_backend = crear_security_group(SG_BACKEND, 'API 8080 solo desde el frontend')
     sg_rds = crear_security_group(SG_RDS, 'PostgreSQL 5432 solo desde el backend')
 
-    # Frontend: puerto 80 abierto a todo el mundo, porque es el sitio público
+    # Frontend: 80 abierto a todos
     agregar_regla(sg_frontend, 80, {'IpRanges': [{'CidrIp': '0.0.0.0/0'}]})
-    # Backend: puerto 8080 SOLO desde el security group del frontend
+    # Backend: 8080 solo desde el frontend
     agregar_regla(sg_backend, 8080, {'UserIdGroupPairs': [{'GroupId': sg_frontend}]})
-    # Base: puerto 5432 SOLO desde el security group del backend
+    # Base: 5432 solo desde el backend
     agregar_regla(sg_rds, 5432, {'UserIdGroupPairs': [{'GroupId': sg_backend}]})
 
-    # No abro el 22 en ningún grupo: para entrar a las instancias uso SSM
+    # El 22 no se abre: a las instancias se entra por SSM
     print("Reglas: 80 <- Internet | 8080 <- frontend | 5432 <- backend")
     return sg_frontend, sg_backend, sg_rds
 
 
-# ======================================================================
-# Paso 4: base de datos RDS PostgreSQL
-# ======================================================================
+# Paso 4: base de datos RDS
 def crear_base_de_datos(password, sg_rds):
-    # Basado en el ejercicio 9 y en lo que vimos en la clase 21
     rds.create_db_instance(
         DBInstanceIdentifier=DB_IDENTIFIER,
         DBInstanceClass=DB_INSTANCE_CLASS,
         Engine=DB_ENGINE,
         EngineVersion=DB_ENGINE_VERSION,
-        DBName=DB_NAME,                   # crea además la base "servicedesk" adentro
+        DBName=DB_NAME,                   # crea la base "servicedesk" adentro
         MasterUsername=DB_USER,
         MasterUserPassword=password,
         AllocatedStorage=DB_STORAGE_GB,
-        VpcSecurityGroupIds=[sg_rds],     # si no lo paso, queda con el grupo por defecto
-        PubliclyAccessible=False,         # sin IP pública: solo se llega desde adentro de la VPC
-        BackupRetentionPeriod=0,          # igual que el ejercicio 9: sin backups automáticos en el lab
+        VpcSecurityGroupIds=[sg_rds],
+        PubliclyAccessible=False,         # sin IP pública
+        BackupRetentionPeriod=0,          # sin backups automáticos
         Tags=TAGS
     )
     print(f"Creando la base {DB_IDENTIFIER}...")
 
-    # Python no espera solo: el waiter frena el script hasta que la base esté
-    # disponible (clase 21). Tarda entre 5 y 10 minutos.
+    # Espero a que esté disponible antes de seguir
     print("Esperando a que la base esté disponible (5 a 10 minutos)...")
     rds.get_waiter('db_instance_available').wait(DBInstanceIdentifier=DB_IDENTIFIER)
 
@@ -966,19 +916,14 @@ def crear_base_de_datos(password, sg_rds):
     return endpoint
 
 
-# ======================================================================
-# Pasos 5 y 6: instancias EC2 con user data
-# ======================================================================
+# Pasos 5 y 6: instancias EC2
 def armar_user_data(plantilla, reemplazos):
-    # Leo la plantilla (como Ejemplos/rds.py lee su archivo) y cambio cada
-    # marcador __NOMBRE__ por su valor real. Es lo mismo que pide el README de
-    # la app con sus <MARCADORES>: "reemplazar y desplegar".
+    # Lee la plantilla y cambia cada marcador __NOMBRE__ por su valor
     contenido = open(plantilla).read()
     for marcador, valor in reemplazos.items():
         contenido = contenido.replace(marcador, valor)
 
-    # El user data tiene un límite de 16 KB (clase 20). Lo controlo antes de
-    # mandarlo para tener un error claro y no uno genérico de AWS.
+    # AWS no acepta user data de más de 16 KB
     if len(contenido) > 16000:
         print(f"ERROR: el user data de {plantilla} supera el límite de 16 KB")
         exit(1)
@@ -986,15 +931,12 @@ def armar_user_data(plantilla, reemplazos):
 
 
 def obtener_ami():
-    # Igual que el ejercicio 12: pido a SSM la última AMI de Amazon Linux 2023,
-    # así no dejo escrito un ID de AMI que con el tiempo deja de existir
+    # Última AMI de Amazon Linux 2023, así no queda un ID fijo que después caduque
     parameter = ssm.get_parameter(Name=AMI_PARAMETER)
     return parameter['Parameter']['Value']
 
 
 def crear_instancia(nombre, image_id, sg_id, user_data):
-    # run_instances como en los ejercicios 6, 7 y 12: le paso el security group
-    # de su capa, el perfil del lab, el user data y el tag Name en la creación
     response = ec2.run_instances(
         ImageId=image_id,
         InstanceType=INSTANCE_TYPE,
@@ -1008,18 +950,15 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
             'Tags': [{'Key': 'Name', 'Value': nombre}] + TAGS
         }]
     )
-    # Devuelvo el diccionario de la instancia: de ahí saco el ID y la IP privada
+    # Devuelvo la instancia entera: de ahí salen el ID y la IP privada
     instancia = response['Instances'][0]
     print(f"Instancia {nombre} creada con ID: {instancia['InstanceId']}")
     return instancia
 
 
-# ======================================================================
 # Paso 7: ajuste final y chequeos por SSM
-# ======================================================================
 def ejecutar_comandos(instance_id, comandos):
-    # Mando una lista de comandos de bash a la instancia por SSM, sin SSH
-    # (ejercicios 6 y 12). Los comandos corren como root.
+    # Corre comandos de bash en la instancia por SSM (como root, sin SSH)
     response = ssm.send_command(
         InstanceIds=[instance_id],
         DocumentName='AWS-RunShellScript',
@@ -1027,9 +966,8 @@ def ejecutar_comandos(instance_id, comandos):
     )
     command_id = response['Command']['CommandId']
 
-    # Igual que el ejercicio 6: pregunto el estado cada 5 segundos hasta que
-    # termine. No uso el waiter command_executed porque espera como mucho
-    # unos 100 segundos y la espera del user data puede ser más larga.
+    # Pregunto cada 5 segundos hasta que termine. El waiter de SSM espera
+    # menos de 2 minutos y acá la espera puede ser más larga.
     while True:
         time.sleep(5)
         output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
@@ -1044,30 +982,24 @@ def ejecutar_comandos(instance_id, comandos):
 
 
 def configurar_backend(backend_id, ip_frontend):
-    # El backend arrancó con FRONTEND_ORIGIN pendiente, porque cuando lo creé
-    # el frontend todavía no existía. El README de la app dice que ese valor
-    # "puede actualizarse después mediante SSM": eso hago acá. Después corro
-    # el HealthCheck del backend que trae el mismo README.
+    # Cuando se creó el backend todavía no había IP del frontend.
+    # Acá la completo en el .env (CORS), reinicio la API y la pruebo.
     comandos = [
         'set -e',
-        # espero a que el user data termine (como máximo 10 minutos)
+        # espero a que termine el user data, 10 minutos como máximo
         "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 5; done'",
-        # completo FRONTEND_ORIGIN (CORS) con la IP pública del frontend
         f"sed -i 's|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=http://{ip_frontend}|' /opt/servicedesk/.env",
-        # reinicio la API para que tome el valor nuevo
         'systemctl restart servicedesk',
-        # healthcheck del README: hasta 30 intentos, uno cada 2 segundos
+        # hasta 30 intentos, cada 2 segundos
         'for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8080/health && exit 0; sleep 2; done; exit 1'
     ]
     salida = ejecutar_comandos(backend_id, comandos)
-    # Si la API responde es porque también se conectó a la base: el proceso
-    # se conecta a RDS al arrancar y, si no puede, se cierra.
+    # Si responde, también se conectó a la base: la API se cierra si no puede
     print(f"API (backend) responde: {salida.strip()}")
 
 
 def verificar_frontend(frontend_id):
-    # HealthCheck del frontend del README de la app: pide /health a Nginx, que
-    # lo reenvía al backend. Así pruebo la cadena Nginx -> API, no solo el puerto 80.
+    # Pide /health a Nginx, que lo pasa al backend: prueba Nginx -> API
     comandos = [
         'set -e',
         "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-frontend-ready ]; do sleep 5; done'",
@@ -1078,13 +1010,9 @@ def verificar_frontend(frontend_id):
 
 
 def verificar_desde_internet(backend_id, ip_frontend):
-    # Último chequeo, como lo haría un usuario: entro por la IP PÚBLICA del
-    # frontend, o sea, pasando por Internet y por el security group del 80.
-    # Lo lanzo desde la instancia backend (por SSM) para no depender de que
-    # quien ejecuta el script tenga curl instalado.
-    #   - "/" devuelve la página de React (prueba Nginx y los estáticos).
-    #   - "/api/v1/categories" es un endpoint público de la API que lee la
-    #     base, así que prueba la cadena completa: Nginx -> API -> RDS.
+    # Entra por la IP pública del frontend, como un usuario.
+    # Lo corro desde el backend para no depender de tener curl en la máquina local.
+    # "/" prueba la web; "/api/v1/categories" lee la base, así que prueba todo.
     url = f"http://{ip_frontend}"
     comandos = [
         'set -e',
@@ -1095,13 +1023,10 @@ def verificar_desde_internet(backend_id, ip_frontend):
     print(salida.strip())
 
 
-# ======================================================================
-# Programa principal: los pasos en orden
-# ======================================================================
+# Programa principal
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis (región {REGION})")
-    # Muestro el sufijo porque identifica todos los recursos de esta ejecución
-    # (sirve para encontrarlos y borrarlos después, ver README)
+    # El sufijo identifica los recursos de esta ejecución (sirve para borrarlos)
     print(f"Sufijo de este despliegue: {SUFIJO}")
 
     titulo("Paso 1: contraseña de la base de datos")
@@ -1119,7 +1044,7 @@ def main():
     titulo("Paso 5: instancia EC2 del backend")
     image_id = obtener_ami()
     print(f"AMI obtenida desde SSM: {image_id}")
-    # Primero el backend, porque el frontend necesita su IP privada para Nginx
+    # Va primero porque el frontend necesita su IP privada
     user_data_backend = armar_user_data(PLANTILLA_BACKEND, {
         '__BUCKET__': BUCKET,
         '__REGION__': REGION,
@@ -1142,12 +1067,10 @@ def main():
     frontend = crear_instancia(NOMBRE_FRONTEND, image_id, sg_frontend, user_data_frontend)
     frontend_id = frontend['InstanceId']
 
-    # Igual que los ejercicios 6 y 12: espero a que las dos instancias pasen
-    # los chequeos de estado. Un solo waiter puede esperar varias a la vez.
+    # Espero a que las dos instancias pasen los chequeos de estado
     print("Esperando a que las instancias estén listas (unos minutos)...")
     ec2.get_waiter('instance_status_ok').wait(InstanceIds=[backend_id, frontend_id])
-    # La IP pública no viene en la respuesta de run_instances (se asigna
-    # después), por eso la consulto ahora con describe_instances
+    # La IP pública se asigna después de crearla, por eso la consulto ahora
     response = ec2.describe_instances(InstanceIds=[frontend_id])
     ip_frontend = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
     print(f"IP pública del frontend: {ip_frontend}")
@@ -1168,9 +1091,7 @@ def main():
     print(f"  Instancias:      {backend_id} (backend) {frontend_id} (frontend)")
 
 
-# Solo ejecuto main() si corro el archivo directamente (ejercicio 3 de los Labs).
-# Si AWS devuelve un error (credenciales vencidas, permisos, límites del lab),
-# lo muestro y termino con código 1, igual que el ejercicio 1.
+# Si AWS devuelve un error (credenciales vencidas, permisos...), lo muestro y salgo con 1
 if __name__ == '__main__':
     try:
         main()
@@ -1183,60 +1104,41 @@ if __name__ == '__main__':
 
 ```bash
 #!/bin/bash
-# ======================================================================
-# user_data_backend.sh - arranque de la EC2 backend (API en Go)
-# ======================================================================
-# Es una plantilla: deploy.py reemplaza los marcadores __NOMBRE__ con los
-# valores reales (bucket, región, endpoint de RDS, usuario, contraseña y
-# nombre de la base) y manda el resultado como user data. AWS lo ejecuta
-# como root, una sola vez, en el primer arranque de la instancia.
-#
-# Los pasos 2 a 4 son el bloque "Backend" del README de la app. Lo que
-# agregué yo: la descarga desde S3 (paso 1), la copia de docs/ y la marca
-# final (paso 5), que el README usa en su HealthCheck pero no crea.
+# user_data_backend.sh
+# Arranque de la EC2 backend (API en Go). Corre como root en el primer boot.
+# Es una plantilla: deploy.py cambia los marcadores __NOMBRE__ por los valores reales.
 
-# Si un comando falla, si uso una variable sin definir o si falla algo
-# dentro de un pipe, el script se detiene (explicado en el README de la app)
+# Corta el script ante cualquier error
 set -euo pipefail
 
-# ---------- 1. Descargar los artefactos desde el bucket ----------
-# El bucket es privado. La instancia puede leerlo porque la creo con
-# LabInstanceProfile, y la AWS CLI ya viene instalada en Amazon Linux 2023.
+# 1. Descargar el binario y la documentación desde el bucket
 aws s3 cp "s3://__BUCKET__/servicedesk" /tmp/servicedesk --region __REGION__
 aws s3 cp "s3://__BUCKET__/docs/" /tmp/docs/ --recursive --region __REGION__
 
-# ---------- 2. Usuario del servicio y archivos ----------
-# Creo un usuario de sistema sin login: la API no corre como root.
+# 2. Usuario sin login para que la API no corra como root
 useradd --system --home /opt/servicedesk --shell /sbin/nologin servicedesk || true
-# Carpeta de adjuntos de los tickets (solo el usuario del servicio puede entrar)
+# Carpeta para los adjuntos de los tickets
 install -d -o servicedesk -g servicedesk -m 0750 /opt/servicedesk/uploads
-# Binario de la API, con permiso de ejecución
+# Binario de la API
 install -o servicedesk -g servicedesk -m 0755 /tmp/servicedesk /opt/servicedesk/servicedesk
-# La API sirve /docs leyendo docs/index.html y docs/openapi.yaml desde su
-# carpeta de trabajo, por eso los copio a /opt/servicedesk/docs
+# Archivos que muestra la API en /docs
 install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
 install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
 
-# ---------- 3. Variables de la API (/opt/servicedesk/.env) ----------
-# - DATABASE_URL: conexión a RDS con TLS (sslmode=require).
-# - JWT_SECRET: lo genero acá con openssl, así es aleatorio y no queda
-#   escrito en ningún archivo del repositorio.
-# - FRONTEND_ORIGIN: todavía no sé la IP pública del frontend (se crea
-#   después), así que dejo PENDIENTE y deploy.py lo completa por SSM.
+# 3. Variables de la API
+# JWT_SECRET se genera al azar acá. FRONTEND_ORIGIN queda pendiente
+# porque el frontend todavía no existe; después lo completa deploy.py.
 jwt_secret=$(openssl rand -hex 32)
 printf '%s\n' \
     "DATABASE_URL=host=__ENDPOINT_RDS__ user=__RDS_USER__ password=__RDS_PASSWORD__ dbname=__RDS_DATABASE__ port=5432 sslmode=require" \
     "JWT_SECRET=${jwt_secret}" \
     'PORT=8080' \
     'FRONTEND_ORIGIN=http://PENDIENTE' > /opt/servicedesk/.env
-# Solo el usuario del servicio puede leer el archivo, porque tiene secretos
+# Tiene secretos: solo lo lee el usuario del servicio
 chown servicedesk:servicedesk /opt/servicedesk/.env
 chmod 0600 /opt/servicedesk/.env
 
-# ---------- 4. Servicio systemd ----------
-# La unidad carga el .env, ejecuta la API con el usuario servicedesk, la
-# reinicia si se cae y la deja con permisos mínimos: sin escalar privilegios,
-# con /tmp propio y con el disco en solo lectura salvo la carpeta uploads/.
+# 4. Servicio de systemd para la API, con permisos mínimos
 cat > /etc/systemd/system/servicedesk.service <<'EOF'
 [Unit]
 Description=ServiceDesk API
@@ -1258,12 +1160,10 @@ ReadWritePaths=/opt/servicedesk/uploads
 [Install]
 WantedBy=multi-user.target
 EOF
-# Registro la unidad nueva, la habilito para cada arranque y la inicio ya
 systemctl daemon-reload
 systemctl enable --now servicedesk
 
-# ---------- 5. Marca de "terminé" ----------
-# deploy.py espera a que exista este archivo antes de hacer los chequeos
+# 5. Aviso de que terminó (deploy.py espera este archivo)
 touch /var/lib/servicedesk-backend-ready
 ```
 
@@ -1271,36 +1171,26 @@ touch /var/lib/servicedesk-backend-ready
 
 ```bash
 #!/bin/bash
-# ======================================================================
-# user_data_frontend.sh - arranque de la EC2 frontend (Nginx + React)
-# ======================================================================
-# Es una plantilla: deploy.py reemplaza los marcadores __NOMBRE__ (bucket,
-# región e IP privada del backend) y manda el resultado como user data.
-# AWS lo ejecuta como root, una sola vez, en el primer arranque.
-#
-# Los pasos 2 y 3 son el bloque "Frontend" del README de la app. Lo que
-# agregué yo es la descarga desde S3 (paso 1).
+# user_data_frontend.sh
+# Arranque de la EC2 frontend (Nginx + React). Corre como root en el primer boot.
+# Es una plantilla: deploy.py cambia los marcadores __NOMBRE__ por los valores reales.
 
-# Si un comando falla, si uso una variable sin definir o si falla algo
-# dentro de un pipe, el script se detiene
+# Corta el script ante cualquier error
 set -euo pipefail
 
-# ---------- 1. Descargar los estáticos desde el bucket ----------
+# 1. Descargar el frontend desde el bucket
 aws s3 cp "s3://__BUCKET__/web.tar.gz" /tmp/web.tar.gz --region __REGION__
 
-# ---------- 2. Instalar Nginx y publicar los estáticos ----------
-# Amazon Linux usa dnf. -y para que no pida confirmación (nadie la puede dar).
+# 2. Instalar Nginx y dejar los archivos de React en su carpeta
 dnf install -y nginx
 install -d -m 0755 /var/www/servicedesk
 tar -xzf /tmp/web.tar.gz -C /var/www/servicedesk
-# Borro cualquier configuración de ejemplo para que no compita con la mía
+# Saco la configuración de ejemplo
 rm -f /etc/nginx/conf.d/*.conf
 
-# ---------- 3. Configuración de Nginx ----------
-# - Sirve los archivos de React y, para cualquier ruta que no sea un archivo
-#   (/tickets, /equipo...), devuelve index.html para que React la resuelva.
-# - Reenvía /api/, /health y /docs a la API, por la IP PRIVADA del backend.
-#   Por eso el 8080 no está abierto a Internet: solo el frontend llega ahí.
+# 3. Configuración de Nginx
+# Sirve React y manda /api/, /health y /docs al backend por su IP privada.
+# Cualquier otra ruta devuelve index.html para que la resuelva React.
 cat > /etc/nginx/conf.d/servicedesk.conf <<'EOF'
 server {
     listen 80 default_server;
@@ -1321,11 +1211,10 @@ server {
     location / { try_files $uri $uri/ /index.html; }
 }
 EOF
-# Valido la sintaxis antes de iniciar, y dejo Nginx habilitado e iniciado
+# Chequeo la configuración y arranco Nginx
 nginx -t
 systemctl enable --now nginx
 
-# ---------- 4. Marca de "terminé" ----------
-# deploy.py espera a que exista este archivo antes de hacer el chequeo
+# 4. Aviso de que terminó (deploy.py espera este archivo)
 touch /var/lib/servicedesk-frontend-ready
 ```
