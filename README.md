@@ -84,15 +84,6 @@ Salida de `./ej1/ej1_reporte_usuarios.sh` con los usuarios del ejemplo de la let
 ana	1000	/home/ana	/bin/bash	SI	SI
 juan	1001	/home/juan	/bin/maligno	NO	NO
 2 usuarios listados
-```
-
-### Ver la salida alineada
-
-Como el separador es el tabulador, con nombres largos las columnas se ven corridas en la terminal. El script no agrega títulos ni alinea, para respetar el formato de la letra. Para leerlo más cómodo se puede formatear afuera:
-
-```bash
-{ printf 'USUARIO\tUID\tHOME\tSHELL\tHOME_OK\tDUEÑO\n'; ./ej1/ej1_reporte_usuarios.sh -t; } | column -t -s $'\t'
-```
 
 ## Códigos de salida
 
