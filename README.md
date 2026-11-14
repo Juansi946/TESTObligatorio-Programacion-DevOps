@@ -32,12 +32,23 @@ Banco Centralis: reporte de usuarios en Bash (ejercicio 1) y despliegue de la ap
 
 ## Descripción
 
-`ej1_reporte_usuarios.sh` lee `/etc/passwd` y, por cada usuario, imprime separados por tabulador: nombre, UID, home, shell, si el home existe y es un directorio (`SI`/`NO`) y si el usuario es el propietario de ese home (`SI`/`NO`). Al final imprime la cantidad de usuarios listados.
+`ej1/ej1_reporte_usuarios.sh` lista los usuarios del sistema leyendo `/etc/passwd` (no usa el comando `id`). Por cada usuario imprime una línea con estos campos, separados por tabulador:
+
+| Campo | Ejemplo |
+|---|---|
+| Nombre | `ana` |
+| UID | `1000` |
+| Directorio home | `/home/ana` |
+| Shell de login | `/bin/bash` |
+| ¿El home existe y es un directorio? | `SI` / `NO` |
+| ¿El usuario es dueño de su home? | `SI` / `NO` |
+
+Al final imprime el total: `1 usuario listado` o `N usuarios listados`.
 
 ## Requisitos
 
-- Linux con Bash (probado en la familia Red Hat y en Ubuntu).
-- Permiso de lectura sobre `/etc/passwd`.
+- Linux con Bash y los comandos básicos (`cut`, `grep`, `stat`). Probado en Ubuntu.
+- Permiso de lectura sobre `/etc/passwd` (cualquier usuario lo tiene; no hace falta root).
 
 ## Modo de uso
 
@@ -46,40 +57,97 @@ chmod +x ej1/ej1_reporte_usuarios.sh
 ./ej1/ej1_reporte_usuarios.sh [-t] [-s] [-f] [Usuario]
 ```
 
-| Modificador | Efecto |
+| Opción | Qué hace |
 |---|---|
-| `-t` | Considera todos los usuarios. Sin `-t` se ignoran los de UID menor a 1000. |
-| `-s` | Lista solo los usuarios cuya shell de login es `/bin/bash`. |
+| _(sin opciones)_ | Lista los usuarios con UID mayor o igual a 1000. |
+| `-t` | Incluye también los usuarios con UID menor a 1000 (root y usuarios de sistema). |
+| `-s` | Lista solo los usuarios con shell `/bin/bash`. |
 | `-f` | Lista solo los usuarios cuyo home existe y es un directorio. |
-| `Usuario` | Analiza únicamente a ese usuario. |
+| `Usuario` | Analiza solo ese usuario. Sin `-t` también se le aplica el filtro de UID. |
 
-Los modificadores se pueden combinar y pasar en cualquier orden, separados (`-t -s`) o juntos (`-ts`), siempre antes del nombre de usuario. Se procesan con `getopts`.
+- Los modificadores se combinan entre sí: `-t -s -f` es lo mismo que `-tsf`.
+- Van siempre **antes** del usuario. `ana -t` da error de cantidad de parámetros.
 
-Ejemplos:
+### Ejemplos
 
 ```bash
-./ej1/ej1_reporte_usuarios.sh                 # usuarios comunes (UID >= 1000)
-./ej1/ej1_reporte_usuarios.sh -t              # todos los usuarios
-./ej1/ej1_reporte_usuarios.sh -t -s -f root   # solo root, con las tres condiciones
+./ej1/ej1_reporte_usuarios.sh              # usuarios comunes
+./ej1/ej1_reporte_usuarios.sh -t           # todos, incluido root
+./ej1/ej1_reporte_usuarios.sh -s -f        # comunes, con bash y home válido
+./ej1/ej1_reporte_usuarios.sh root         # 0 usuarios listados (UID 0 < 1000)
+./ej1/ej1_reporte_usuarios.sh -t root      # solo root
+```
+
+Salida de `./ej1/ej1_reporte_usuarios.sh` con los usuarios del ejemplo de la letra:
+
+```
+ana	1000	/home/ana	/bin/bash	SI	SI
+juan	1001	/home/juan	/bin/maligno	NO	NO
+2 usuarios listados
+```
+
+### Ver la salida alineada
+
+Como el separador es el tabulador, con nombres largos las columnas se ven corridas en la terminal. El script no agrega títulos ni alinea, para respetar el formato de la letra. Para leerlo más cómodo se puede formatear afuera:
+
+```bash
+{ printf 'USUARIO\tUID\tHOME\tSHELL\tHOME_OK\tDUEÑO\n'; ./ej1/ej1_reporte_usuarios.sh -t; } | column -t -s $'\t'
 ```
 
 ## Códigos de salida
 
+Los mensajes de error salen por la salida estándar de errores.
+
 | Código | Significado |
 |---|---|
-| 0 | Ejecución correcta |
+| 0 | Ejecución correcta (también si no hay usuarios para listar) |
 | 1 | Modificador inválido |
 | 2 | Cantidad de parámetros incorrecta |
-| 3 | El nombre de usuario recibido es vacío |
+| 3 | Nombre de usuario vacío |
 | 4 | `/etc/passwd` no existe |
 | 5 | `/etc/passwd` no es un archivo regular |
-| 6 | No hay permiso de lectura sobre `/etc/passwd` |
-| 7 | El usuario recibido no existe |
-| 8 | `/etc/passwd` tiene una línea con un UID que no es un número |
+| 6 | Sin permiso de lectura sobre `/etc/passwd` |
+| 7 | El usuario no existe |
+| 8 | `/etc/passwd` tiene un UID que no es numérico |
+
+## Cómo funciona
+
+1. **Modificadores:** se leen con `getopts`. Un modificador desconocido corta con código 1.
+2. **Parámetros:** se cuentan *después* de sacar los modificadores (`shift $((OPTIND - 1))`); solo puede quedar el usuario.
+3. **Validar `/etc/passwd`:** que exista, que sea un archivo regular, que se pueda leer y que todos los UID sean números. Se revisa todo antes de imprimir para no dejar una salida a medias.
+4. **Validar el usuario:** si se pasó uno, tiene que estar en `/etc/passwd`.
+5. **Recorrer los usuarios:** se aplican los filtros (usuario, UID, `-s`, `-f`) y se imprime la línea.
+6. **Total:** cantidad de usuarios listados, en singular o plural.
+
+Decisiones:
+
+- **Dueño del home:** se compara el UID del dueño del directorio (`stat -L -c %u`) con el UID del usuario. Se compara por número y no por nombre porque dos usuarios pueden compartir UID. `-L` sigue los enlaces simbólicos, igual que `[ -d ]`.
+- **Usuario existente:** se compara el nombre exacto con `=`, para que `ana` no coincida con `anabel`.
+- **Líneas con espacios:** se recorre `/etc/passwd` con `IFS` en salto de línea, así un home con espacios no rompe la línea.
+
+## Pruebas realizadas
+
+| Caso | Resultado |
+|---|---|
+| `root` | `0 usuarios listados` |
+| `-t root` | `root 0 /root /bin/bash SI SI` y `1 usuario listado` |
+| `juan` (home inexistente, shell `/bin/maligno`) | `NO NO` |
+| Home que existe pero es de otro usuario | `SI NO` |
+| Home que es un archivo y no un directorio | `NO NO`, y no aparece con `-f` |
+| Home con espacios en el nombre | Se lista bien |
+| `-s` | No incluye `/usr/bin/bash` ni `/bin/maligno` |
+| `-t -s -f` y `-tsf` | Mismo resultado |
+| `-x` / `-tx` | Código 1 |
+| `-t ana juan` / `ana -t` | Código 2 |
+| `""` | Código 3 |
+| `noexiste` | Código 7 |
+| Ejecutado como usuario común (no root) | Mismo resultado |
 
 ## Captura de una ejecución exitosa
 
-_COMPLETAR: pegar acá la captura de pantalla de una ejecución correcta (guardarla en `docs/img/` y enlazarla con `![ejecución exitosa](docs/img/ej1_ok.png)`)._
+_COMPLETAR: guardar la captura en `docs/img/ej1_ok.png` y dejar esta línea:_ `![Ejecución exitosa del ejercicio 1](docs/img/ej1_ok.png)`
+
+El código completo está al final, en [Código completo de los scripts](#código-completo-de-los-scripts).
 
 ---
 
