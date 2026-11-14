@@ -1,10 +1,7 @@
-# secretos
+# Secretos: nunca se suben al repositorio (quedan en el historial para siempre)
 .env
 *.pem
 
-# python
+# Entorno virtual y archivos que genera Python
 .venv/
 __pycache__/
-
-# artefactos de la app (pesados; se copian del repo de la cátedra)
-ej2/artifacts/
