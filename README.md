@@ -84,6 +84,7 @@ Salida de `./ej1/ej1_reporte_usuarios.sh` con los usuarios del ejemplo de la let
 ana	1000	/home/ana	/bin/bash	SI	SI
 juan	1001	/home/juan	/bin/maligno	NO	NO
 2 usuarios listados
+```
 
 ## Códigos de salida
 
