@@ -4,11 +4,14 @@
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
 #
-# Los archivos de la app van a un bucket S3 y cada instancia los descarga al arrancar.
+# Usa el repositorio de la app tal cual lo entrega la cátedra, sin modificarlo:
+# toma de ahí los archivos compilados y los sube a un bucket S3, desde donde
+# cada instancia los descarga al arrancar.
 #
 # Uso:
 #   python3 ej2/deploy.py
 # La contraseña de la base sale de RDS_ADMIN_PASSWORD o, si no está, se pide por teclado.
+# El repositorio de la app se busca al lado de este repositorio (ver README).
 
 import getpass
 import os
@@ -38,17 +41,21 @@ TAGS = [
 # Contraseña de la base
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
+# Repositorio de la app de la cátedra. Por defecto, la carpeta "obligatorio"
+# al lado de este repositorio; si está en otro lado, se indica con RUTA_APP.
+CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
+RUTA_APP = os.environ.get('RUTA_APP', os.path.join(CARPETA_SCRIPT, '..', '..', 'obligatorio'))
+
+# Archivos de la app que se suben a S3: (ruta en el repo de la app, nombre en S3)
+ARTEFACTOS = [
+    ('tsx/artifacts/servicedesk', 'servicedesk'),             # binario de la API
+    ('tsx/artifacts/web.tar.gz', 'web.tar.gz'),               # frontend de React
+    ('tsx/backend/docs/index.html', 'docs/index.html'),       # documentación que se ve en /docs
+    ('tsx/backend/docs/openapi.yaml', 'docs/openapi.yaml'),
+]
+
 # S3
 BUCKET = f'servicedesk-artefactos-{SUFIJO}'
-# Rutas armadas desde la carpeta del script, así funciona desde cualquier carpeta
-CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
-CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, 'artifacts')
-ARTEFACTOS = [
-    'servicedesk',           # binario de la API
-    'web.tar.gz',            # frontend de React
-    'docs/index.html',       # documentación que se ve en /docs
-    'docs/openapi.yaml',
-]
 
 # Security groups
 SG_FRONTEND = f'servicedesk-sg-frontend-{SUFIJO}'
@@ -72,8 +79,95 @@ INSTANCE_PROFILE = 'LabInstanceProfile'
 AMI_PARAMETER = '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 NOMBRE_BACKEND = f'servicedesk-backend-{SUFIJO}'
 NOMBRE_FRONTEND = f'servicedesk-frontend-{SUFIJO}'
-PLANTILLA_BACKEND = os.path.join(CARPETA_SCRIPT, 'user_data_backend.sh')
-PLANTILLA_FRONTEND = os.path.join(CARPETA_SCRIPT, 'user_data_frontend.sh')
+
+
+# User data de las instancias
+# El bloque del medio de cada uno son los comandos del README de la app
+# ("Comandos para Instalación en Amazon Linux"), con sus marcadores <...>.
+# Antes se agrega la descarga desde S3, que el README da por hecha, y después
+# lo que falta para /docs y el archivo que espera el chequeo final.
+# Nota: en Python, \\n se escribe así para que en el script quede \n.
+
+USER_DATA_BACKEND = '''#!/bin/bash
+# Descarga del binario y la documentación desde el bucket
+aws s3 cp "s3://<BUCKET>/servicedesk" /tmp/servicedesk --region <REGION>
+aws s3 cp "s3://<BUCKET>/docs/" /tmp/docs/ --recursive --region <REGION>
+
+# Comandos del README de la app (Backend)
+set -euo pipefail
+useradd --system --home /opt/servicedesk --shell /sbin/nologin servicedesk || true
+install -d -o servicedesk -g servicedesk -m 0750 /opt/servicedesk/uploads
+install -o servicedesk -g servicedesk -m 0755 /tmp/servicedesk /opt/servicedesk/servicedesk
+jwt_secret=$(openssl rand -hex 32)
+printf '%s\\n' 'DATABASE_URL=host=<ENDPOINT_RDS> user=<RDS_USER> password=<RDS_PASSWORD> dbname=<RDS_DATABASE> port=5432 sslmode=require' "JWT_SECRET=$jwt_secret" 'PORT=8080' 'FRONTEND_ORIGIN=http://<IP_FRONTEND>' > /opt/servicedesk/.env
+chown servicedesk:servicedesk /opt/servicedesk/.env
+chmod 0600 /opt/servicedesk/.env
+cat > /etc/systemd/system/servicedesk.service <<'EOF'
+[Unit]
+Description=ServiceDesk API
+After=network-online.target
+
+[Service]
+User=servicedesk
+Group=servicedesk
+WorkingDirectory=/opt/servicedesk
+EnvironmentFile=/opt/servicedesk/.env
+ExecStart=/opt/servicedesk/servicedesk
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/servicedesk/uploads
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now servicedesk
+
+# Archivos que muestra la API en /docs
+install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
+install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
+
+# Aviso de que terminó (lo espera el chequeo del backend)
+touch /var/lib/servicedesk-backend-ready
+'''
+
+USER_DATA_FRONTEND = '''#!/bin/bash
+# Descarga del frontend desde el bucket
+aws s3 cp "s3://<BUCKET>/web.tar.gz" /tmp/web.tar.gz --region <REGION>
+
+# Comandos del README de la app (Frontend)
+set -euo pipefail
+dnf install -y nginx
+install -d -m 0755 /var/www/servicedesk
+tar -xzf /tmp/web.tar.gz -C /var/www/servicedesk
+rm -f /etc/nginx/conf.d/*.conf
+cat > /etc/nginx/conf.d/servicedesk.conf <<'EOF'
+server {
+    listen 80 default_server;
+    server_name _;
+    root /var/www/servicedesk;
+    index index.html;
+    client_max_body_size 12m;
+
+    location /api/ {
+        proxy_pass http://<IP_BACKEND>:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location = /health { proxy_pass http://<IP_BACKEND>:8080; }
+    location /docs { proxy_pass http://<IP_BACKEND>:8080; }
+    location / { try_files $uri $uri/ /index.html; }
+}
+EOF
+nginx -t
+systemctl enable --now nginx
+touch /var/lib/servicedesk-frontend-ready
+'''
 
 
 # Clientes de AWS, uno por servicio
@@ -88,7 +182,20 @@ def titulo(texto):
     print(f"\n=== {texto} ===")
 
 
-# Paso 1: contraseña de la base de datos
+# Paso 1: archivos de la app y contraseña de la base
+def verificar_archivos_app():
+    # Comprueba que estén todos los archivos antes de crear nada
+    for ruta, nombre in ARTEFACTOS:
+        ruta_completa = os.path.join(RUTA_APP, ruta)
+        try:
+            open(ruta_completa).close()
+        except FileNotFoundError:
+            print(f"ERROR: no encuentro {ruta_completa}")
+            print("Revisá dónde está el repositorio de la app (ver README)")
+            exit(1)
+    print(f"Archivos de la app encontrados en {RUTA_APP}")
+
+
 def leer_password():
     # Se busca en la variable de entorno; si no está, se pide sin mostrarla
     password = os.environ.get(VARIABLE_PASSWORD)
@@ -97,7 +204,7 @@ def leer_password():
 
     # Se valida antes de crear nada, para no dejar recursos a medias.
     # RDS pide 8 caracteres o más y no acepta / @ " ni espacios.
-    # ' $ ` \ tampoco, porque rompen el script de bash donde se escribe.
+    # ' $ ` \ tampoco, porque rompen el script de bash o el .env donde se escribe.
     if len(password) < 8:
         print("ERROR: la contraseña tiene que tener al menos 8 caracteres")
         exit(1)
@@ -109,21 +216,16 @@ def leer_password():
     return password
 
 
-# Paso 2: bucket S3 con los artefactos
+# Paso 2: bucket S3 con los archivos de la app
 def crear_bucket_y_subir_artefactos():
     # El bucket queda privado; las instancias lo leen con LabInstanceProfile
     s3.create_bucket(Bucket=BUCKET)
     print(f"Bucket creado: {BUCKET}")
 
-    for artefacto in ARTEFACTOS:
-        ruta = os.path.join(CARPETA_ARTEFACTOS, artefacto)
-        try:
-            # El nombre en S3 es la misma ruta, así docs/ queda como carpeta
-            s3.upload_file(ruta, BUCKET, artefacto)
-            print(f"Subido: {artefacto}")
-        except FileNotFoundError:
-            print(f"ERROR: no encuentro {ruta}. Revisá la carpeta ej2/artifacts (ver README)")
-            exit(1)
+    # Se suben directo desde el repositorio de la app, sin copiarlos a otro lado
+    for ruta, nombre in ARTEFACTOS:
+        s3.upload_file(os.path.join(RUTA_APP, ruta), BUCKET, nombre)
+        print(f"Subido: {nombre}")
 
 
 # Paso 3: security groups
@@ -199,14 +301,14 @@ def crear_base_de_datos(password, sg_rds):
 
 # Pasos 5 y 6: instancias EC2
 def armar_user_data(plantilla, reemplazos):
-    # Lee la plantilla y cambia cada marcador __NOMBRE__ por su valor
-    contenido = open(plantilla).read()
+    # Cambia cada marcador <NOMBRE> de la plantilla por su valor
+    contenido = plantilla
     for marcador, valor in reemplazos.items():
         contenido = contenido.replace(marcador, valor)
 
     # AWS no acepta user data de más de 16 KB
     if len(contenido) > 16000:
-        print(f"ERROR: el user data de {plantilla} supera el límite de 16 KB")
+        print("ERROR: el user data supera el límite de 16 KB")
         exit(1)
     return contenido
 
@@ -263,8 +365,9 @@ def ejecutar_comandos(instance_id, comandos):
 
 
 def configurar_backend(backend_id, ip_frontend):
-    # Cuando se creó el backend todavía no había IP del frontend.
-    # Acá se completa en el .env (CORS), se reinicia la API y se prueba.
+    # Cuando se creó el backend todavía no había IP del frontend, así que
+    # FRONTEND_ORIGIN quedó con el marcador. Acá se completa en el .env (CORS),
+    # se reinicia la API y se prueba.
     comandos = [
         'set -e',
         # espera a que termine el user data, 10 minutos como máximo
@@ -310,7 +413,8 @@ def main():
     # El sufijo identifica los recursos de esta ejecución (sirve para borrarlos)
     print(f"Sufijo de este despliegue: {SUFIJO}")
 
-    titulo("Paso 1: contraseña de la base de datos")
+    titulo("Paso 1: archivos de la app y contraseña de la base")
+    verificar_archivos_app()
     password = leer_password()
 
     titulo("Paso 2: bucket S3 y artefactos")
@@ -325,14 +429,15 @@ def main():
     titulo("Paso 5: instancia EC2 del backend")
     image_id = obtener_ami()
     print(f"AMI obtenida desde SSM: {image_id}")
-    # Va primero porque el frontend necesita su IP privada
-    user_data_backend = armar_user_data(PLANTILLA_BACKEND, {
-        '__BUCKET__': BUCKET,
-        '__REGION__': REGION,
-        '__ENDPOINT_RDS__': endpoint,
-        '__RDS_USER__': DB_USER,
-        '__RDS_PASSWORD__': password,
-        '__RDS_DATABASE__': DB_NAME
+    # Va primero porque el frontend necesita su IP privada.
+    # <IP_FRONTEND> no se reemplaza todavía: se completa en el paso 7.
+    user_data_backend = armar_user_data(USER_DATA_BACKEND, {
+        '<BUCKET>': BUCKET,
+        '<REGION>': REGION,
+        '<ENDPOINT_RDS>': endpoint,
+        '<RDS_USER>': DB_USER,
+        '<RDS_PASSWORD>': password,
+        '<RDS_DATABASE>': DB_NAME
     })
     backend = crear_instancia(NOMBRE_BACKEND, image_id, sg_backend, user_data_backend)
     backend_id = backend['InstanceId']
@@ -340,10 +445,10 @@ def main():
     print(f"IP privada del backend: {ip_backend}")
 
     titulo("Paso 6: instancia EC2 del frontend")
-    user_data_frontend = armar_user_data(PLANTILLA_FRONTEND, {
-        '__BUCKET__': BUCKET,
-        '__REGION__': REGION,
-        '__IP_BACKEND__': ip_backend
+    user_data_frontend = armar_user_data(USER_DATA_FRONTEND, {
+        '<BUCKET>': BUCKET,
+        '<REGION>': REGION,
+        '<IP_BACKEND>': ip_backend
     })
     frontend = crear_instancia(NOMBRE_FRONTEND, image_id, sg_frontend, user_data_frontend)
     frontend_id = frontend['InstanceId']
