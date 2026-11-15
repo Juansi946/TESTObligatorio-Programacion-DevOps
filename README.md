@@ -1102,8 +1102,8 @@ def verificar_desde_internet(backend_id, ip_frontend):
     url = f"http://{ip_frontend}"
     comandos = [
         'set -e',
-        f"curl --fail --silent --output /dev/null {url}/ && echo 'Web (/): OK'",
-        f"curl --fail --silent --output /dev/null {url}/api/v1/categories && echo 'API + base (/api/v1/categories): OK'"
+        f"curl --fail --silent {url}/ > /dev/null && echo 'Web (/): OK'",
+        f"curl --fail --silent {url}/api/v1/categories > /dev/null && echo 'API + base (/api/v1/categories): OK'"
     ]
     salida = ejecutar_comandos(backend_id, comandos)
     print(salida.strip())
