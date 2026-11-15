@@ -470,7 +470,7 @@ También se puede hacer desde la consola de AWS, en el mismo orden: EC2 (instanc
 | `Error de AWS: ... ExpiredToken` o `InvalidClientTokenId` | Las credenciales vencieron (duran unas 4 horas) o son de una sesión anterior. | Copiar las credenciales nuevas del laboratorio a `~/.aws/credentials`. |
 | `ERROR: la contraseña ...` | La contraseña no cumple los requisitos. | Elegir otra ([requisitos](#2-elegir-la-contraseña-de-la-base-de-datos)). |
 | El navegador dice que no encuentra el sitio `http`, o la página queda cargando | La dirección quedó mal escrita (por ejemplo `http//IP`) o el navegador la cambió a `https://`. | Escribir `http://<IP_PUBLICA>` exacto, o probar en una ventana de incógnito. Para descartar el navegador: `curl http://<IP_PUBLICA>/health`. |
-| `ERROR ejecutando comandos en i-...: Failed` en el paso 7 | Falló el *user data* o la aplicación no arrancó. | Ver abajo cómo revisar los logs. Después, borrar el despliegue ([Limpieza](#limpieza)) y volver a ejecutar. |
+| `ERROR ejecutando comandos en i-...: Failed` o `TimedOut` en el paso 7 | Falló el *user data* o la aplicación no arrancó. Si el *user data* falla, el paso 7 espera hasta que SSM corta el comando (puede tardar hasta una hora) y termina con `TimedOut`. | Ver abajo cómo revisar los logs. Después, borrar el despliegue ([Limpieza](#limpieza)) y volver a ejecutar. |
 | `InvalidInstanceId` en el paso 7 | El agente de SSM de la instancia todavía no se había registrado. Es poco común. | Borrar el despliegue y volver a ejecutar. |
 
 **Cómo revisar los logs de una instancia.** Con el *Session Manager plugin* de la AWS CLI instalado, se abre una terminal en la instancia sin SSH:
@@ -1070,10 +1070,10 @@ def configurar_backend(backend_id, ip_frontend):
     # se reinicia la API y se prueba.
     comandos = [
         'set -e',
-        # espera a que termine el user data, 10 minutos como máximo
-        "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 5; done'",
+        # espera a que termine el user data
+        'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 2; done',
         f"sed -i 's|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=http://{ip_frontend}|' /opt/servicedesk/.env",
-        'systemctl restart servicedesk',
+        'sudo systemctl restart servicedesk',
         # hasta 30 intentos, cada 2 segundos
         'for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8080/health && exit 0; sleep 2; done; exit 1'
     ]
@@ -1086,7 +1086,7 @@ def verificar_frontend(frontend_id):
     # Pide /health a Nginx, que lo pasa al backend: prueba Nginx -> API
     comandos = [
         'set -e',
-        "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-frontend-ready ]; do sleep 5; done'",
+        'while [ ! -f /var/lib/servicedesk-frontend-ready ]; do sleep 2; done',
         'curl --fail --silent http://127.0.0.1/health'
     ]
     salida = ejecutar_comandos(frontend_id, comandos)
