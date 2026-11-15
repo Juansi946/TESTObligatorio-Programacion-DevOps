@@ -360,8 +360,6 @@ Bucket creado: servicedesk-artefactos-3f9a1c0b
 === Paso 7: ajuste final y chequeos ===
 API (backend) responde: {"status":"ok"}
 Nginx -> API responde: {"status":"ok"}
-Web (/): OK
-API + base (/api/v1/categories): OK
 
 === Despliegue terminado ===
 Aplicación:    http://<IP_PUBLICA>
@@ -379,7 +377,7 @@ Aplicación:    http://<IP_PUBLICA>
 | 4 | Crea la RDS PostgreSQL 16 sin IP pública, espera a que esté disponible y obtiene el endpoint | El backend necesita el endpoint para conectarse | `crear_base_de_datos` |
 | 5 | Obtiene la última AMI de Amazon Linux 2023, completa el *user data* del backend y lanza la EC2 backend | El frontend necesita la IP privada del backend para Nginx | `obtener_ami`, `armar_user_data`, `crear_instancia` |
 | 6 | Completa el *user data* del frontend y lanza la EC2 frontend. Espera a que las dos instancias estén listas y obtiene la IP pública del frontend | El backend necesita la IP pública del frontend para CORS | `armar_user_data`, `crear_instancia` |
-| 7 | Por SSM: completa `FRONTEND_ORIGIN` en el backend, reinicia la API y hace los chequeos | Es lo último que falta para que la aplicación quede funcionando | `configurar_backend`, `verificar_frontend`, `verificar_desde_internet` |
+| 7 | Por SSM: completa `FRONTEND_ORIGIN` en el backend, reinicia la API y corre los HealthCheck del README de la app | Es lo último que falta para que la aplicación quede funcionando | `configurar_backend`, `verificar_frontend` |
 
 Qué hace cada instancia al arrancar (*user data*, con los comandos del README de la aplicación):
 
@@ -390,20 +388,20 @@ Qué hace cada instancia al arrancar (*user data*, con los comandos del README d
 
 ### Chequeos automáticos (paso 7)
 
-El script termina con error si alguno falla:
+Son los comandos de la sección "Comandos para HealthCheck" del README de la app. El script termina con error si alguno falla:
 
 | Chequeo | Qué comprueba |
 |---|---|
 | `API (backend) responde` | La API arrancó. Como se conecta a la base al iniciar y se cierra si no puede, también comprueba la conexión con RDS. |
 | `Nginx -> API responde` | Nginx reenvía las peticiones al backend por la red privada. |
-| `Web (/): OK` | La página se sirve por la IP pública, pasando por Internet y por el security group del puerto 80. |
-| `API + base (/api/v1/categories): OK` | La cadena completa desde Internet: Nginx → API → RDS. |
 
 ### Prueba manual en el navegador
 
 1. Abrir `http://<IP_PUBLICA>` escribiendo `http://` a mano. El sitio no tiene HTTPS: si el navegador cambia la dirección a `https://`, la página queda cargando.
 2. Iniciar sesión con el administrador demo que crea la aplicación: `admin@servicedesk.local` / `admin123`.
 3. Probar las funciones: crear un ticket, agregarle un comentario y un adjunto (PDF o PNG de hasta 10 MB), cambiarle el estado y ver la auditoría, crear una categoría y un usuario, y revisar `/reportes`.
+
+Esta prueba comprueba el camino completo desde Internet: el security group del puerto 80, Nginx, la API y la base de datos.
 
 Desde la terminal también se puede comprobar:
 
@@ -1095,20 +1093,6 @@ def verificar_frontend(frontend_id):
     print(f"Nginx -> API responde: {salida.strip()}")
 
 
-def verificar_desde_internet(backend_id, ip_frontend):
-    # Entra por la IP pública del frontend, como un usuario.
-    # Se corre desde el backend para no depender de tener curl en la máquina local.
-    # "/" prueba la web; "/api/v1/categories" lee la base, así que prueba todo.
-    url = f"http://{ip_frontend}"
-    comandos = [
-        'set -e',
-        f"curl --fail --silent {url}/ > /dev/null && echo 'Web (/): OK'",
-        f"curl --fail --silent {url}/api/v1/categories > /dev/null && echo 'API + base (/api/v1/categories): OK'"
-    ]
-    salida = ejecutar_comandos(backend_id, comandos)
-    print(salida.strip())
-
-
 # Programa principal
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis (región {REGION})")
@@ -1167,7 +1151,6 @@ def main():
     titulo("Paso 7: ajuste final y chequeos")
     configurar_backend(backend_id, ip_frontend)
     verificar_frontend(frontend_id)
-    verificar_desde_internet(backend_id, ip_frontend)
 
     titulo("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
