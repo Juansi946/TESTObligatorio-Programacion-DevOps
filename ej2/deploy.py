@@ -4,14 +4,13 @@
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
 #
-# Usa el repositorio de la app tal cual lo entrega la cátedra, sin modificarlo:
-# toma de ahí los archivos compilados y los sube a un bucket S3, desde donde
-# cada instancia los descarga al arrancar.
+# Los dos archivos de la app (descargados del release de la cátedra) están en
+# la carpeta artifacts/ del repositorio. El script los sube a un bucket S3,
+# desde donde cada instancia los descarga al arrancar.
 #
 # Uso:
 #   python3 ej2/deploy.py
 # La contraseña de la base sale de RDS_ADMIN_PASSWORD o, si no está, se pide por teclado.
-# El repositorio de la app se busca al lado de este repositorio (ver README).
 
 import getpass
 import os
@@ -41,17 +40,13 @@ TAGS = [
 # Contraseña de la base
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
-# Repositorio de la app de la cátedra. Por defecto, la carpeta "obligatorio"
-# al lado de este repositorio; si está en otro lado, se indica con RUTA_APP.
+# Archivos de la app, en la carpeta artifacts/ de la raíz del repositorio.
+# La ruta se arma desde la carpeta del script, así funciona desde cualquier carpeta.
 CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
-RUTA_APP = os.environ.get('RUTA_APP', os.path.join(CARPETA_SCRIPT, '..', '..', 'obligatorio'))
-
-# Archivos de la app que se suben a S3: (ruta en el repo de la app, nombre en S3)
+CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, '..', 'artifacts')
 ARTEFACTOS = [
-    ('tsx/artifacts/servicedesk', 'servicedesk'),             # binario de la API
-    ('tsx/artifacts/web.tar.gz', 'web.tar.gz'),               # frontend de React
-    ('tsx/backend/docs/index.html', 'docs/index.html'),       # documentación que se ve en /docs
-    ('tsx/backend/docs/openapi.yaml', 'docs/openapi.yaml'),
+    'servicedesk',           # backend: binario de la API
+    'web.tar.gz',            # frontend: archivos de React
 ]
 
 # S3
@@ -84,14 +79,13 @@ NOMBRE_FRONTEND = f'servicedesk-frontend-{SUFIJO}'
 # User data de las instancias
 # El bloque del medio de cada uno son los comandos del README de la app
 # ("Comandos para Instalación en Amazon Linux"), con sus marcadores <...>.
-# Antes se agrega la descarga desde S3, que el README da por hecha, y después
-# lo que falta para /docs y el archivo que espera el chequeo final.
+# Antes se agrega la descarga desde S3, que el README da por hecha, y en el
+# backend, después, el archivo que espera el chequeo final.
 # Nota: en Python, \\n se escribe así para que en el script quede \n.
 
 USER_DATA_BACKEND = '''#!/bin/bash
-# Descarga del binario y la documentación desde el bucket
+# Descarga del binario desde el bucket
 aws s3 cp "s3://<BUCKET>/servicedesk" /tmp/servicedesk --region <REGION>
-aws s3 cp "s3://<BUCKET>/docs/" /tmp/docs/ --recursive --region <REGION>
 
 # Comandos del README de la app (Backend)
 set -euo pipefail
@@ -125,10 +119,6 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable --now servicedesk
-
-# Archivos que muestra la API en /docs
-install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
-install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
 
 # Aviso de que terminó (lo espera el chequeo del backend)
 touch /var/lib/servicedesk-backend-ready
@@ -184,16 +174,16 @@ def titulo(texto):
 
 # Paso 1: archivos de la app y contraseña de la base
 def verificar_archivos_app():
-    # Comprueba que estén todos los archivos antes de crear nada
-    for ruta, nombre in ARTEFACTOS:
-        ruta_completa = os.path.join(RUTA_APP, ruta)
+    # Comprueba que estén los dos archivos antes de crear nada
+    for artefacto in ARTEFACTOS:
+        ruta = os.path.join(CARPETA_ARTEFACTOS, artefacto)
         try:
-            open(ruta_completa).close()
+            open(ruta).close()
         except FileNotFoundError:
-            print(f"ERROR: no encuentro {ruta_completa}")
-            print("Revisá dónde está el repositorio de la app (ver README)")
+            print(f"ERROR: no encuentro {ruta}")
+            print("Revisá la carpeta artifacts/ del repositorio (ver README)")
             exit(1)
-    print(f"Archivos de la app encontrados en {RUTA_APP}")
+    print("Archivos de la app encontrados: " + ", ".join(ARTEFACTOS))
 
 
 def leer_password():
@@ -222,10 +212,9 @@ def crear_bucket_y_subir_artefactos():
     s3.create_bucket(Bucket=BUCKET)
     print(f"Bucket creado: {BUCKET}")
 
-    # Se suben directo desde el repositorio de la app, sin copiarlos a otro lado
-    for ruta, nombre in ARTEFACTOS:
-        s3.upload_file(os.path.join(RUTA_APP, ruta), BUCKET, nombre)
-        print(f"Subido: {nombre}")
+    for artefacto in ARTEFACTOS:
+        s3.upload_file(os.path.join(CARPETA_ARTEFACTOS, artefacto), BUCKET, artefacto)
+        print(f"Subido: {artefacto}")
 
 
 # Paso 3: security groups
@@ -468,7 +457,6 @@ def main():
 
     titulo("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
-    print(f"Documentación: http://{ip_frontend}/docs")
     print("Abrir con http:// escrito a mano: el sitio no tiene HTTPS.")
     print(f"Recursos creados (todos con el sufijo {SUFIJO}):")
     print(f"  Bucket:          {BUCKET}")
