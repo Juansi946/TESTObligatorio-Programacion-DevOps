@@ -29,14 +29,6 @@ REGION = 'us-east-1'
 # Sufijo aleatorio para que los nombres no choquen con recursos que ya existan
 SUFIJO = secrets.token_hex(4)
 
-# Tags que llevan todos los recursos
-TAGS = [
-    {'Key': 'Proyecto', 'Value': 'obligatorio-devops'},
-    {'Key': 'Cliente', 'Value': 'banco-centralis'},
-    {'Key': 'Ambiente', 'Value': 'produccion'},
-    {'Key': 'Despliegue', 'Value': SUFIJO},
-]
-
 # Contraseña de la base
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
@@ -221,23 +213,11 @@ def crear_security_group(nombre, descripcion):
     # Sin VpcId se crea en la VPC por defecto, la misma que usan EC2 y RDS
     response = ec2.create_security_group(
         GroupName=nombre,
-        Description=descripcion,
-        TagSpecifications=[{
-            'ResourceType': 'security-group',
-            'Tags': [{'Key': 'Name', 'Value': nombre}] + TAGS
-        }]
+        Description=descripcion
     )
     sg_id = response['GroupId']
     print(f"Security group creado: {nombre} ({sg_id})")
     return sg_id
-
-
-def agregar_regla(sg_id, puerto, origen):
-    # Abre un solo puerto TCP. origen puede ser un rango de IP (IpRanges)
-    # o otro security group (UserIdGroupPairs).
-    regla = {'IpProtocol': 'tcp', 'FromPort': puerto, 'ToPort': puerto}
-    regla.update(origen)
-    ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[regla])
 
 
 def crear_security_groups():
@@ -247,11 +227,35 @@ def crear_security_groups():
     sg_rds = crear_security_group(SG_RDS, 'PostgreSQL 5432 solo desde el backend')
 
     # Frontend: 80 abierto a todos
-    agregar_regla(sg_frontend, 80, {'IpRanges': [{'CidrIp': '0.0.0.0/0'}]})
-    # Backend: 8080 solo desde el frontend
-    agregar_regla(sg_backend, 8080, {'UserIdGroupPairs': [{'GroupId': sg_frontend}]})
-    # Base: 5432 solo desde el backend
-    agregar_regla(sg_rds, 5432, {'UserIdGroupPairs': [{'GroupId': sg_backend}]})
+    ec2.authorize_security_group_ingress(
+        GroupId=sg_frontend,
+        IpPermissions=[{
+            'IpProtocol': 'tcp',
+            'FromPort': 80,
+            'ToPort': 80,
+            'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+        }]
+    )
+    # Backend: 8080 solo desde el security group del frontend
+    ec2.authorize_security_group_ingress(
+        GroupId=sg_backend,
+        IpPermissions=[{
+            'IpProtocol': 'tcp',
+            'FromPort': 8080,
+            'ToPort': 8080,
+            'UserIdGroupPairs': [{'GroupId': sg_frontend}]
+        }]
+    )
+    # Base: 5432 solo desde el security group del backend
+    ec2.authorize_security_group_ingress(
+        GroupId=sg_rds,
+        IpPermissions=[{
+            'IpProtocol': 'tcp',
+            'FromPort': 5432,
+            'ToPort': 5432,
+            'UserIdGroupPairs': [{'GroupId': sg_backend}]
+        }]
+    )
 
     # El 22 no se abre: a las instancias se entra por SSM
     print("Reglas: 80 <- Internet | 8080 <- frontend | 5432 <- backend")
@@ -271,8 +275,7 @@ def crear_base_de_datos(password, sg_rds):
         AllocatedStorage=DB_STORAGE_GB,
         VpcSecurityGroupIds=[sg_rds],
         PubliclyAccessible=False,         # sin IP pública
-        BackupRetentionPeriod=0,          # sin backups automáticos
-        Tags=TAGS
+        BackupRetentionPeriod=0           # sin backups automáticos
     )
     print(f"Creando la base {DB_IDENTIFIER}...")
 
@@ -310,16 +313,20 @@ def obtener_ami():
 def crear_instancia(nombre, image_id, sg_id, user_data):
     response = ec2.run_instances(
         ImageId=image_id,
-        InstanceType=INSTANCE_TYPE,
         MinCount=1,
         MaxCount=1,
+        InstanceType=INSTANCE_TYPE,
         SecurityGroupIds=[sg_id],
         IamInstanceProfile={'Name': INSTANCE_PROFILE},
         UserData=user_data,
-        TagSpecifications=[{
-            'ResourceType': 'instance',
-            'Tags': [{'Key': 'Name', 'Value': nombre}] + TAGS
-        }]
+        TagSpecifications=[
+            {
+                'ResourceType': 'instance',
+                'Tags': [
+                    {'Key': 'Name', 'Value': nombre}
+                ]
+            }
+        ]
     )
     # Devuelve la instancia entera: de ahí salen el ID y la IP privada
     instancia = response['Instances'][0]
@@ -337,17 +344,18 @@ def ejecutar_comandos(instance_id, comandos):
     )
     command_id = response['Command']['CommandId']
 
-    # Consulta el estado cada 5 segundos hasta que termine. No se usa el waiter
-    # de SSM porque espera menos de 2 minutos y acá puede tardar más.
+    # Espera el resultado: consulta el estado hasta que el comando termine.
+    # Primero espera 2 segundos, porque recién enviado el comando todavía no existe.
+    time.sleep(2)
     while True:
-        time.sleep(5)
         output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
         if output['Status'] in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
             break
+        time.sleep(2)
 
     if output['Status'] != 'Success':
         print(f"ERROR ejecutando comandos en {instance_id}: {output['Status']}")
-        print(output['StandardErrorContent'])
+        print(output['StandardOutputContent'])
         exit(1)
     return output['StandardOutputContent']
 
@@ -398,7 +406,7 @@ def verificar_desde_internet(backend_id, ip_frontend):
 # Programa principal
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis (región {REGION})")
-    # El sufijo identifica los recursos de esta ejecución (sirve para borrarlos)
+    # El sufijo va en el nombre de todos los recursos de esta ejecución (sirve para borrarlos)
     print(f"Sufijo de este despliegue: {SUFIJO}")
 
     titulo("Paso 1: archivos de la app y contraseña de la base")
@@ -444,9 +452,10 @@ def main():
     # Espera a que las dos instancias pasen los chequeos de estado
     print("Esperando a que las instancias estén listas (unos minutos)...")
     ec2.get_waiter('instance_status_ok').wait(InstanceIds=[backend_id, frontend_id])
-    # La IP pública se asigna después de crearla, por eso se consulta ahora
-    response = ec2.describe_instances(InstanceIds=[frontend_id])
-    ip_frontend = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
+    # La IP pública se asigna después de crearla, por eso se consulta ahora,
+    # buscando la instancia por su tag Name
+    instances = ec2.describe_instances(Filters=[{'Name': 'tag:Name', 'Values': [NOMBRE_FRONTEND]}])
+    ip_frontend = instances['Reservations'][0]['Instances'][0]['PublicIpAddress']
     print(f"IP pública del frontend: {ip_frontend}")
 
     titulo("Paso 7: ajuste final y chequeos")
