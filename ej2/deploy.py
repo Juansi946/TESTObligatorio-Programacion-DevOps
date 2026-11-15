@@ -366,10 +366,10 @@ def configurar_backend(backend_id, ip_frontend):
     # se reinicia la API y se prueba.
     comandos = [
         'set -e',
-        # espera a que termine el user data, 10 minutos como máximo
-        "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 5; done'",
+        # espera a que termine el user data
+        'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 2; done',
         f"sed -i 's|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=http://{ip_frontend}|' /opt/servicedesk/.env",
-        'systemctl restart servicedesk',
+        'sudo systemctl restart servicedesk',
         # hasta 30 intentos, cada 2 segundos
         'for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8080/health && exit 0; sleep 2; done; exit 1'
     ]
@@ -382,7 +382,7 @@ def verificar_frontend(frontend_id):
     # Pide /health a Nginx, que lo pasa al backend: prueba Nginx -> API
     comandos = [
         'set -e',
-        "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-frontend-ready ]; do sleep 5; done'",
+        'while [ ! -f /var/lib/servicedesk-frontend-ready ]; do sleep 2; done',
         'curl --fail --silent http://127.0.0.1/health'
     ]
     salida = ejecutar_comandos(frontend_id, comandos)
