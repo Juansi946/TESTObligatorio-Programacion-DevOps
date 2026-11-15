@@ -331,13 +331,13 @@ Ejemplo de contraseña válida: `ServiceDesk2026`.
 
 ## Ejecución
 
-Con el entorno virtual activo, desde la carpeta de este repositorio:
+Con el entorno virtual activo, **desde la raíz de este repositorio**:
 
 ```bash
 python3 ej2/deploy.py
 ```
 
-También funciona desde adentro de `ej2/` (`python3 deploy.py`).
+Hay que ejecutarlo desde la raíz porque el script busca los archivos de la app con rutas relativas (`artifacts/servicedesk` y `artifacts/web.tar.gz`).
 
 - Antes de crear nada, comprueba que estén los dos archivos de `artifacts/` y que la contraseña sea válida.
 - Tarda entre 15 y 20 minutos. La base de datos es lo más lento (5 a 10 minutos). No cerrar la terminal mientras corre.
@@ -351,7 +351,7 @@ Despliegue de ServiceDesk - Banco Centralis (región us-east-1)
 Sufijo de este despliegue: 3f9a1c0b
 
 === Paso 1: archivos de la app y contraseña de la base ===
-Archivos de la app encontrados: servicedesk, web.tar.gz
+Archivos de la app encontrados: artifacts/servicedesk, artifacts/web.tar.gz
 Contraseña válida (no se muestra por seguridad)
 
 === Paso 2: bucket S3 y artefactos ===
@@ -467,7 +467,7 @@ También se puede hacer desde la consola de AWS, en el mismo orden: EC2 (instanc
 |---|---|---|
 | `ModuleNotFoundError: No module named 'boto3'` | El entorno virtual no está activo en esa terminal, o Boto3 no se instaló. | Desde la carpeta del repositorio: `source .venv/bin/activate` y `pip install boto3`. |
 | `error: externally-managed-environment` al usar `pip` | Se usó `pip` fuera del entorno virtual (pasa en Ubuntu y Debian recientes). | Crear y activar el entorno virtual ([Instalación, paso 4](#4-crear-el-entorno-virtual-e-instalar-boto3)). |
-| `ERROR: no encuentro .../artifacts/...` | Falta alguno de los dos archivos en la copia local del repositorio. | Ejecutar `git status` y `git checkout -- artifacts` para recuperarlos. |
+| `ERROR: no encuentro artifacts/...` | El script se ejecutó desde otra carpeta, o falta alguno de los dos archivos. | Ir a la raíz del repositorio (`cd ~/TESTObligatorio-Programacion-DevOps`) y ejecutar `python3 ej2/deploy.py`. Si sigue faltando, `git checkout -- artifacts` lo recupera. |
 | `Unable to locate credentials` o `NoCredentialsError` | No existe `~/.aws/credentials` o está vacío. | Cargar las credenciales ([Antes de cada ejecución, paso 1](#1-iniciar-el-laboratorio-y-cargar-las-credenciales)). |
 | `Error de AWS: ... ExpiredToken` o `InvalidClientTokenId` | Las credenciales vencieron (duran unas 4 horas) o son de una sesión anterior. | Copiar las credenciales nuevas del laboratorio a `~/.aws/credentials`. |
 | `ERROR: la contraseña ...` | La contraseña no cumple los requisitos. | Elegir otra ([requisitos](#2-elegir-la-contraseña-de-la-base-de-datos)). |
@@ -714,7 +714,7 @@ exit 0
 # la carpeta artifacts/ del repositorio. El script los sube a un bucket S3,
 # desde donde cada instancia los descarga al arrancar.
 #
-# Uso:
+# Uso (desde la raíz del repositorio):
 #   python3 ej2/deploy.py
 # La contraseña de la base sale de RDS_ADMIN_PASSWORD o, si no está, se pide por teclado.
 
@@ -747,12 +747,10 @@ TAGS = [
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
 # Archivos de la app, en la carpeta artifacts/ de la raíz del repositorio.
-# La ruta se arma desde la carpeta del script, así funciona desde cualquier carpeta.
-CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
-CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, '..', 'artifacts')
+# Las rutas son relativas a esa raíz, que es desde donde se ejecuta el script.
 ARTEFACTOS = [
-    'servicedesk',           # backend: binario de la API
-    'web.tar.gz',            # frontend: archivos de React
+    'artifacts/servicedesk',     # backend: binario de la API
+    'artifacts/web.tar.gz',      # frontend: archivos de React
 ]
 
 # S3
@@ -881,13 +879,12 @@ def titulo(texto):
 # Paso 1: archivos de la app y contraseña de la base
 def verificar_archivos_app():
     # Comprueba que estén los dos archivos antes de crear nada
-    for artefacto in ARTEFACTOS:
-        ruta = os.path.join(CARPETA_ARTEFACTOS, artefacto)
+    for ruta in ARTEFACTOS:
         try:
             open(ruta).close()
         except FileNotFoundError:
             print(f"ERROR: no encuentro {ruta}")
-            print("Revisá la carpeta artifacts/ del repositorio (ver README)")
+            print("Ejecutá el script desde la raíz del repositorio (ver README)")
             exit(1)
     print("Archivos de la app encontrados: " + ", ".join(ARTEFACTOS))
 
@@ -918,9 +915,11 @@ def crear_bucket_y_subir_artefactos():
     s3.create_bucket(Bucket=BUCKET)
     print(f"Bucket creado: {BUCKET}")
 
-    for artefacto in ARTEFACTOS:
-        s3.upload_file(os.path.join(CARPETA_ARTEFACTOS, artefacto), BUCKET, artefacto)
-        print(f"Subido: {artefacto}")
+    for ruta in ARTEFACTOS:
+        # En S3 se guarda solo con el nombre del archivo, sin la carpeta
+        nombre = ruta.split('/')[-1]
+        s3.upload_file(ruta, BUCKET, nombre)
+        print(f"Subido: {nombre}")
 
 
 # Paso 3: security groups
