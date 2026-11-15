@@ -25,11 +25,12 @@ Banco Centralis: reporte de usuarios en Bash (ejercicio 1) y despliegue de la ap
 ├── docs/img/                       capturas de pantalla
 ├── ej1/
 │   └── ej1_reporte_usuarios.sh     script de Bash
-└── ej2/
-    └── deploy.py                   script de Python que hace todo el despliegue
+├── ej2/
+│   └── deploy.py                   script de Python que hace todo el despliegue
+└── artifacts/                      archivos de la aplicación, descargados del release de la cátedra
+    ├── servicedesk                 backend (binario de la API)
+    └── web.tar.gz                  frontend (archivos de React)
 ```
-
-La aplicación que despliega el ejercicio 2 no está en este repositorio: se usa directamente desde el repositorio de la cátedra, sin modificarlo (ver [Qué usa del repositorio de la aplicación](#qué-usa-del-repositorio-de-la-aplicación)).
 
 ---
 
@@ -156,7 +157,7 @@ El código completo está al final, en [Código completo de los scripts](#códig
 
 Con un solo comando, el script crea toda la infraestructura, instala la aplicación en las instancias y comprueba que funcione de punta a punta. No hay que hacer nada a mano en la consola de AWS.
 
-La aplicación se usa **tal cual la entrega la cátedra**: el script lee los archivos del repositorio de la aplicación sin copiarlos ni modificarlos, y las instancias ejecutan los comandos de instalación de su README.
+La aplicación se usa **tal cual la entrega la cátedra**: sus dos archivos compilados están en `artifacts/` sin modificar, y las instancias ejecutan los comandos de instalación de su README.
 
 ## Arquitectura
 
@@ -191,23 +192,21 @@ No se abre el puerto 22 en ningún grupo: los comandos dentro de las instancias 
 
 `<sufijo>` son 8 caracteres aleatorios que el script genera en cada ejecución (ver [Ejecución](#ejecución)).
 
-## Qué usa del repositorio de la aplicación
+## Archivos de la aplicación
 
-La aplicación está en el repositorio de la cátedra [`ORT-AII-ProgramacionDevOps/obligatorio`](https://github.com/ORT-AII-ProgramacionDevOps/obligatorio/tree/main/tsx) (release `tsx-v1.0.0`). `deploy.py` lee de ahí estos archivos y los sube a S3:
+La aplicación solo necesita dos archivos, que se descargaron del release [`tsx-v1.0.0`](https://github.com/ORT-AII-ProgramacionDevOps/obligatorio/releases/tag/tsx-v1.0.0) de la cátedra y están en la carpeta `artifacts/` de este repositorio, sin modificar:
 
-| Archivo en el repositorio de la app | Para qué sirve |
+| Archivo | Para qué sirve |
 |---|---|
-| `tsx/artifacts/servicedesk` | Binario de la API (backend), ya compilado |
-| `tsx/artifacts/web.tar.gz` | Estáticos de React (frontend), ya compilados |
-| `tsx/backend/docs/index.html` | Página de documentación que la API muestra en `/docs` |
-| `tsx/backend/docs/openapi.yaml` | Especificación de la API que usa esa página |
+| `artifacts/servicedesk` | Backend: binario de la API, donde está la lógica |
+| `artifacts/web.tar.gz` | Frontend: la parte visual (React) |
 
-Además, el *user data* de cada instancia (definido dentro de `deploy.py`) contiene los bloques "Backend" y "Frontend" de la sección *Comandos para Instalación en Amazon Linux* del README de la aplicación, **sin cambios** y con sus marcadores (`<ENDPOINT_RDS>`, `<IP_BACKEND>`…), que el script reemplaza antes de crear cada instancia. A esos bloques solo se les agrega:
+Como están en el repositorio, alcanza con clonarlo para desplegar: no hay que descargar nada más. `deploy.py` los sube a un bucket S3 y cada instancia descarga el suyo al arrancar.
 
-- antes: la descarga de los archivos desde S3, que el README da por hecha;
-- después, en el backend: la copia de la documentación para `/docs` y el archivo `servicedesk-backend-ready`, que espera el HealthCheck del README.
+El *user data* de cada instancia (definido dentro de `deploy.py`) contiene los bloques "Backend" y "Frontend" de la sección *Comandos para Instalación en Amazon Linux* del README de la aplicación, **sin cambios** y con sus marcadores (`<ENDPOINT_RDS>`, `<IP_BACKEND>`…), que el script reemplaza antes de crear cada instancia. A esos bloques solo se les agrega:
 
-El repositorio de la aplicación no se modifica en ningún momento.
+- antes: la descarga del archivo desde S3, que el README da por hecha;
+- después, en el backend: el archivo `servicedesk-backend-ready`, que espera el HealthCheck del README.
 
 ## Requisitos
 
@@ -217,8 +216,7 @@ El repositorio de la aplicación no se modifica en ningún momento.
 | Python | 3.9 o superior, con `pip` y `venv`. Se probó con Python 3.13. |
 | Boto3 | Se instala con `pip install boto3`. Se probó con Boto3 1.44. |
 | AWS CLI | Versión 2. El script no la usa, pero sirve para cargar y comprobar las credenciales, borrar los recursos y diagnosticar problemas. |
-| Git | Para clonar los dos repositorios. |
-| Repositorio de la aplicación | Acceso al repositorio de la cátedra `ORT-AII-ProgramacionDevOps/obligatorio`. |
+| Git | Para clonar el repositorio. |
 | Cuenta de AWS | AWS Academy Learner Lab iniciado. El script trabaja en la región `us-east-1` y usa el perfil de instancia `LabInstanceProfile` que trae el laboratorio. |
 
 No hacen falta claves SSH, archivos `.pem` ni configurar nombres: el script genera nombres únicos solo.
@@ -257,34 +255,19 @@ Después, fijar la región por defecto (la usan los comandos de [Limpieza](#limp
 aws configure set region us-east-1
 ```
 
-### 3. Clonar este repositorio y el de la aplicación, uno al lado del otro
+### 3. Clonar el repositorio
 
-Hace falta tener acceso a los dos repositorios. La forma más simple de autenticarse es la CLI de GitHub (`gh auth login`).
+El repositorio es privado: hay que tener acceso como colaborador. La forma más simple de autenticarse es la CLI de GitHub (`gh auth login`).
 
 ```bash
 cd ~
 git clone https://github.com/Juansi946/TESTObligatorio-Programacion-DevOps.git
-git clone https://github.com/ORT-AII-ProgramacionDevOps/obligatorio.git
 ```
 
-Tienen que quedar así, en la misma carpeta:
-
-```
-~/
-├── TESTObligatorio-Programacion-DevOps/    este repositorio
-└── obligatorio/                            repositorio de la app, sin cambios
-```
-
-Comprobar que están los archivos de la app:
+Comprobar que llegaron los archivos de la aplicación (tienen que aparecer `servicedesk`, de unos 23 MB, y `web.tar.gz`):
 
 ```bash
-ls -lh ~/obligatorio/tsx/artifacts ~/obligatorio/tsx/backend/docs
-```
-
-Si el repositorio de la app está en otra carpeta o con otro nombre (por ejemplo `obligatorio-main`, si se bajó como zip), indicar dónde está antes de ejecutar el script. Es la carpeta que contiene `tsx/`:
-
-```bash
-export RUTA_APP=/ruta/a/obligatorio-main
+ls -lh ~/TESTObligatorio-Programacion-DevOps/artifacts
 ```
 
 ### 4. Crear el entorno virtual e instalar Boto3
@@ -356,7 +339,7 @@ python3 ej2/deploy.py
 
 También funciona desde adentro de `ej2/` (`python3 deploy.py`).
 
-- Antes de crear nada, comprueba que encuentra los archivos de la app y que la contraseña es válida.
+- Antes de crear nada, comprueba que estén los dos archivos de `artifacts/` y que la contraseña sea válida.
 - Tarda entre 15 y 20 minutos. La base de datos es lo más lento (5 a 10 minutos). No cerrar la terminal mientras corre.
 - Al empezar, imprime el **sufijo** del despliegue. Todos los recursos lo llevan en el nombre y en el tag `Despliegue`. Anotarlo: sirve para borrarlos después.
 - Al terminar, imprime la URL de la aplicación y la lista de recursos creados.
@@ -368,7 +351,7 @@ Despliegue de ServiceDesk - Banco Centralis (región us-east-1)
 Sufijo de este despliegue: 3f9a1c0b
 
 === Paso 1: archivos de la app y contraseña de la base ===
-Archivos de la app encontrados en /home/usuario/obligatorio
+Archivos de la app encontrados: servicedesk, web.tar.gz
 Contraseña válida (no se muestra por seguridad)
 
 === Paso 2: bucket S3 y artefactos ===
@@ -382,7 +365,6 @@ API + base (/api/v1/categories): OK
 
 === Despliegue terminado ===
 Aplicación:    http://<IP_PUBLICA>
-Documentación: http://<IP_PUBLICA>/docs
 ```
 
 > **Cada ejecución crea un despliegue nuevo y completo**, con otro sufijo. Ejecutar el script dos veces deja dos copias corriendo y gasta el doble del presupuesto del laboratorio. Para volver a desplegar, primero borrar el anterior (ver [Limpieza](#limpieza)).
@@ -391,8 +373,8 @@ Documentación: http://<IP_PUBLICA>/docs
 
 | Paso | Qué hace | Por qué va en ese orden | Función |
 |---|---|---|---|
-| 1 | Comprueba que estén los archivos de la app y toma la contraseña (variable de entorno o teclado) y la valida | Si algo faltara o la contraseña fuera inválida, se descubriría con recursos ya creados | `verificar_archivos_app`, `leer_password` |
-| 2 | Crea el bucket S3 y sube los cuatro archivos de la app | El *user data* tiene un límite de 16 KB y el binario pesa 23 MB: las instancias lo descargan de S3 | `crear_bucket_y_subir_artefactos` |
+| 1 | Comprueba que estén los dos archivos de `artifacts/` y toma la contraseña (variable de entorno o teclado) y la valida | Si algo faltara o la contraseña fuera inválida, se descubriría con recursos ya creados | `verificar_archivos_app`, `leer_password` |
+| 2 | Crea el bucket S3 y sube los dos archivos de la app | El *user data* tiene un límite de 16 KB y el binario pesa 23 MB: las instancias lo descargan de S3 | `crear_bucket_y_subir_artefactos` |
 | 3 | Crea los tres security groups y sus reglas encadenadas | Se pasan a las instancias y a la base al crearlas | `crear_security_groups` |
 | 4 | Crea la RDS PostgreSQL 16 sin IP pública, espera a que esté disponible y obtiene el endpoint | El backend necesita el endpoint para conectarse | `crear_base_de_datos` |
 | 5 | Obtiene la última AMI de Amazon Linux 2023, completa el *user data* del backend y lanza la EC2 backend | El frontend necesita la IP privada del backend para Nginx | `obtener_ami`, `armar_user_data`, `crear_instancia` |
@@ -401,7 +383,7 @@ Documentación: http://<IP_PUBLICA>/docs
 
 Qué hace cada instancia al arrancar (*user data*, con los comandos del README de la aplicación):
 
-- **Backend:** descarga el binario y `docs/` desde S3, crea un usuario de sistema sin login, escribe `/opt/servicedesk/.env` (conexión TLS a RDS y un `JWT_SECRET` aleatorio) y deja la API corriendo como servicio de systemd. `FRONTEND_ORIGIN` queda con el marcador `<IP_FRONTEND>` hasta el paso 7.
+- **Backend:** descarga el binario desde S3, crea un usuario de sistema sin login, escribe `/opt/servicedesk/.env` (conexión TLS a RDS y un `JWT_SECRET` aleatorio) y deja la API corriendo como servicio de systemd. `FRONTEND_ORIGIN` queda con el marcador `<IP_FRONTEND>` hasta el paso 7.
 - **Frontend:** descarga `web.tar.gz` desde S3, instala Nginx, publica los estáticos y configura el reenvío de `/api/`, `/health` y `/docs` a la IP privada del backend.
 
 ## Verificación
@@ -422,7 +404,6 @@ El script termina con error si alguno falla:
 1. Abrir `http://<IP_PUBLICA>` escribiendo `http://` a mano. El sitio no tiene HTTPS: si el navegador cambia la dirección a `https://`, la página queda cargando.
 2. Iniciar sesión con el administrador demo que crea la aplicación: `admin@servicedesk.local` / `admin123`.
 3. Probar las funciones: crear un ticket, agregarle un comentario y un adjunto (PDF o PNG de hasta 10 MB), cambiarle el estado y ver la auditoría, crear una categoría y un usuario, y revisar `/reportes`.
-4. Abrir `http://<IP_PUBLICA>/docs` para ver la documentación de la API.
 
 Desde la terminal también se puede comprobar:
 
@@ -486,7 +467,7 @@ También se puede hacer desde la consola de AWS, en el mismo orden: EC2 (instanc
 |---|---|---|
 | `ModuleNotFoundError: No module named 'boto3'` | El entorno virtual no está activo en esa terminal, o Boto3 no se instaló. | Desde la carpeta del repositorio: `source .venv/bin/activate` y `pip install boto3`. |
 | `error: externally-managed-environment` al usar `pip` | Se usó `pip` fuera del entorno virtual (pasa en Ubuntu y Debian recientes). | Crear y activar el entorno virtual ([Instalación, paso 4](#4-crear-el-entorno-virtual-e-instalar-boto3)). |
-| `ERROR: no encuentro .../tsx/artifacts/servicedesk` | El repositorio de la aplicación no está al lado de este, o tiene otro nombre. | Clonarlo como en [Instalación, paso 3](#3-clonar-este-repositorio-y-el-de-la-aplicación-uno-al-lado-del-otro), o indicar su ruta con `export RUTA_APP=...`. |
+| `ERROR: no encuentro .../artifacts/...` | Falta alguno de los dos archivos en la copia local del repositorio. | Ejecutar `git status` y `git checkout -- artifacts` para recuperarlos. |
 | `Unable to locate credentials` o `NoCredentialsError` | No existe `~/.aws/credentials` o está vacío. | Cargar las credenciales ([Antes de cada ejecución, paso 1](#1-iniciar-el-laboratorio-y-cargar-las-credenciales)). |
 | `Error de AWS: ... ExpiredToken` o `InvalidClientTokenId` | Las credenciales vencieron (duran unas 4 horas) o son de una sesión anterior. | Copiar las credenciales nuevas del laboratorio a `~/.aws/credentials`. |
 | `ERROR: la contraseña ...` | La contraseña no cumple los requisitos. | Elegir otra ([requisitos](#2-elegir-la-contraseña-de-la-base-de-datos)). |
@@ -729,14 +710,13 @@ exit 0
 #
 #   Internet --80--> EC2 frontend (Nginx) --8080--> EC2 backend (API Go) --5432--> RDS PostgreSQL
 #
-# Usa el repositorio de la app tal cual lo entrega la cátedra, sin modificarlo:
-# toma de ahí los archivos compilados y los sube a un bucket S3, desde donde
-# cada instancia los descarga al arrancar.
+# Los dos archivos de la app (descargados del release de la cátedra) están en
+# la carpeta artifacts/ del repositorio. El script los sube a un bucket S3,
+# desde donde cada instancia los descarga al arrancar.
 #
 # Uso:
 #   python3 ej2/deploy.py
 # La contraseña de la base sale de RDS_ADMIN_PASSWORD o, si no está, se pide por teclado.
-# El repositorio de la app se busca al lado de este repositorio (ver README).
 
 import getpass
 import os
@@ -766,17 +746,13 @@ TAGS = [
 # Contraseña de la base
 VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
-# Repositorio de la app de la cátedra. Por defecto, la carpeta "obligatorio"
-# al lado de este repositorio; si está en otro lado, se indica con RUTA_APP.
+# Archivos de la app, en la carpeta artifacts/ de la raíz del repositorio.
+# La ruta se arma desde la carpeta del script, así funciona desde cualquier carpeta.
 CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
-RUTA_APP = os.environ.get('RUTA_APP', os.path.join(CARPETA_SCRIPT, '..', '..', 'obligatorio'))
-
-# Archivos de la app que se suben a S3: (ruta en el repo de la app, nombre en S3)
+CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, '..', 'artifacts')
 ARTEFACTOS = [
-    ('tsx/artifacts/servicedesk', 'servicedesk'),             # binario de la API
-    ('tsx/artifacts/web.tar.gz', 'web.tar.gz'),               # frontend de React
-    ('tsx/backend/docs/index.html', 'docs/index.html'),       # documentación que se ve en /docs
-    ('tsx/backend/docs/openapi.yaml', 'docs/openapi.yaml'),
+    'servicedesk',           # backend: binario de la API
+    'web.tar.gz',            # frontend: archivos de React
 ]
 
 # S3
@@ -809,14 +785,13 @@ NOMBRE_FRONTEND = f'servicedesk-frontend-{SUFIJO}'
 # User data de las instancias
 # El bloque del medio de cada uno son los comandos del README de la app
 # ("Comandos para Instalación en Amazon Linux"), con sus marcadores <...>.
-# Antes se agrega la descarga desde S3, que el README da por hecha, y después
-# lo que falta para /docs y el archivo que espera el chequeo final.
+# Antes se agrega la descarga desde S3, que el README da por hecha, y en el
+# backend, después, el archivo que espera el chequeo final.
 # Nota: en Python, \\n se escribe así para que en el script quede \n.
 
 USER_DATA_BACKEND = '''#!/bin/bash
-# Descarga del binario y la documentación desde el bucket
+# Descarga del binario desde el bucket
 aws s3 cp "s3://<BUCKET>/servicedesk" /tmp/servicedesk --region <REGION>
-aws s3 cp "s3://<BUCKET>/docs/" /tmp/docs/ --recursive --region <REGION>
 
 # Comandos del README de la app (Backend)
 set -euo pipefail
@@ -850,10 +825,6 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable --now servicedesk
-
-# Archivos que muestra la API en /docs
-install -d -o servicedesk -g servicedesk -m 0755 /opt/servicedesk/docs
-install -o servicedesk -g servicedesk -m 0644 /tmp/docs/index.html /tmp/docs/openapi.yaml /opt/servicedesk/docs/
 
 # Aviso de que terminó (lo espera el chequeo del backend)
 touch /var/lib/servicedesk-backend-ready
@@ -909,16 +880,16 @@ def titulo(texto):
 
 # Paso 1: archivos de la app y contraseña de la base
 def verificar_archivos_app():
-    # Comprueba que estén todos los archivos antes de crear nada
-    for ruta, nombre in ARTEFACTOS:
-        ruta_completa = os.path.join(RUTA_APP, ruta)
+    # Comprueba que estén los dos archivos antes de crear nada
+    for artefacto in ARTEFACTOS:
+        ruta = os.path.join(CARPETA_ARTEFACTOS, artefacto)
         try:
-            open(ruta_completa).close()
+            open(ruta).close()
         except FileNotFoundError:
-            print(f"ERROR: no encuentro {ruta_completa}")
-            print("Revisá dónde está el repositorio de la app (ver README)")
+            print(f"ERROR: no encuentro {ruta}")
+            print("Revisá la carpeta artifacts/ del repositorio (ver README)")
             exit(1)
-    print(f"Archivos de la app encontrados en {RUTA_APP}")
+    print("Archivos de la app encontrados: " + ", ".join(ARTEFACTOS))
 
 
 def leer_password():
@@ -947,10 +918,9 @@ def crear_bucket_y_subir_artefactos():
     s3.create_bucket(Bucket=BUCKET)
     print(f"Bucket creado: {BUCKET}")
 
-    # Se suben directo desde el repositorio de la app, sin copiarlos a otro lado
-    for ruta, nombre in ARTEFACTOS:
-        s3.upload_file(os.path.join(RUTA_APP, ruta), BUCKET, nombre)
-        print(f"Subido: {nombre}")
+    for artefacto in ARTEFACTOS:
+        s3.upload_file(os.path.join(CARPETA_ARTEFACTOS, artefacto), BUCKET, artefacto)
+        print(f"Subido: {artefacto}")
 
 
 # Paso 3: security groups
@@ -1193,7 +1163,6 @@ def main():
 
     titulo("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
-    print(f"Documentación: http://{ip_frontend}/docs")
     print("Abrir con http:// escrito a mano: el sitio no tiene HTTPS.")
     print(f"Recursos creados (todos con el sufijo {SUFIJO}):")
     print(f"  Bucket:          {BUCKET}")
