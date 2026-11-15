@@ -13,7 +13,7 @@ aws s3 cp "s3://__BUCKET__/web.tar.gz" /tmp/web.tar.gz --region __REGION__
 dnf install -y nginx
 install -d -m 0755 /var/www/servicedesk
 tar -xzf /tmp/web.tar.gz -C /var/www/servicedesk
-# Saco la configuración de ejemplo
+# Borra la configuración de ejemplo
 rm -f /etc/nginx/conf.d/*.conf
 
 # 3. Configuración de Nginx
@@ -39,7 +39,7 @@ server {
     location / { try_files $uri $uri/ /index.html; }
 }
 EOF
-# Chequeo la configuración y arranco Nginx
+# Valida la configuración y arranca Nginx
 nginx -t
 systemctl enable --now nginx
 

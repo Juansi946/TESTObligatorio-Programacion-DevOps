@@ -40,7 +40,7 @@ VARIABLE_PASSWORD = 'RDS_ADMIN_PASSWORD'
 
 # S3
 BUCKET = f'servicedesk-artefactos-{SUFIJO}'
-# Rutas armadas desde la carpeta del script, así anda desde cualquier lado
+# Rutas armadas desde la carpeta del script, así funciona desde cualquier carpeta
 CARPETA_SCRIPT = os.path.dirname(os.path.abspath(__file__))
 CARPETA_ARTEFACTOS = os.path.join(CARPETA_SCRIPT, 'artifacts')
 ARTEFACTOS = [
@@ -90,12 +90,12 @@ def titulo(texto):
 
 # Paso 1: contraseña de la base de datos
 def leer_password():
-    # La busco en la variable de entorno; si no está, la pido sin mostrarla
+    # Se busca en la variable de entorno; si no está, se pide sin mostrarla
     password = os.environ.get(VARIABLE_PASSWORD)
     if not password:
         password = getpass.getpass("Contraseña para la base de datos: ")
 
-    # La valido antes de crear nada, para no dejar recursos a medias.
+    # Se valida antes de crear nada, para no dejar recursos a medias.
     # RDS pide 8 caracteres o más y no acepta / @ " ni espacios.
     # ' $ ` \ tampoco, porque rompen el script de bash donde se escribe.
     if len(password) < 8:
@@ -186,7 +186,7 @@ def crear_base_de_datos(password, sg_rds):
     )
     print(f"Creando la base {DB_IDENTIFIER}...")
 
-    # Espero a que esté disponible antes de seguir
+    # Espera a que esté disponible antes de seguir
     print("Esperando a que la base esté disponible (5 a 10 minutos)...")
     rds.get_waiter('db_instance_available').wait(DBInstanceIdentifier=DB_IDENTIFIER)
 
@@ -231,7 +231,7 @@ def crear_instancia(nombre, image_id, sg_id, user_data):
             'Tags': [{'Key': 'Name', 'Value': nombre}] + TAGS
         }]
     )
-    # Devuelvo la instancia entera: de ahí salen el ID y la IP privada
+    # Devuelve la instancia entera: de ahí salen el ID y la IP privada
     instancia = response['Instances'][0]
     print(f"Instancia {nombre} creada con ID: {instancia['InstanceId']}")
     return instancia
@@ -247,8 +247,8 @@ def ejecutar_comandos(instance_id, comandos):
     )
     command_id = response['Command']['CommandId']
 
-    # Pregunto cada 5 segundos hasta que termine. El waiter de SSM espera
-    # menos de 2 minutos y acá la espera puede ser más larga.
+    # Consulta el estado cada 5 segundos hasta que termine. No se usa el waiter
+    # de SSM porque espera menos de 2 minutos y acá puede tardar más.
     while True:
         time.sleep(5)
         output = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
@@ -264,10 +264,10 @@ def ejecutar_comandos(instance_id, comandos):
 
 def configurar_backend(backend_id, ip_frontend):
     # Cuando se creó el backend todavía no había IP del frontend.
-    # Acá la completo en el .env (CORS), reinicio la API y la pruebo.
+    # Acá se completa en el .env (CORS), se reinicia la API y se prueba.
     comandos = [
         'set -e',
-        # espero a que termine el user data, 10 minutos como máximo
+        # espera a que termine el user data, 10 minutos como máximo
         "timeout 600 bash -c 'while [ ! -f /var/lib/servicedesk-backend-ready ]; do sleep 5; done'",
         f"sed -i 's|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=http://{ip_frontend}|' /opt/servicedesk/.env",
         'systemctl restart servicedesk',
@@ -292,7 +292,7 @@ def verificar_frontend(frontend_id):
 
 def verificar_desde_internet(backend_id, ip_frontend):
     # Entra por la IP pública del frontend, como un usuario.
-    # Lo corro desde el backend para no depender de tener curl en la máquina local.
+    # Se corre desde el backend para no depender de tener curl en la máquina local.
     # "/" prueba la web; "/api/v1/categories" lee la base, así que prueba todo.
     url = f"http://{ip_frontend}"
     comandos = [
@@ -348,10 +348,10 @@ def main():
     frontend = crear_instancia(NOMBRE_FRONTEND, image_id, sg_frontend, user_data_frontend)
     frontend_id = frontend['InstanceId']
 
-    # Espero a que las dos instancias pasen los chequeos de estado
+    # Espera a que las dos instancias pasen los chequeos de estado
     print("Esperando a que las instancias estén listas (unos minutos)...")
     ec2.get_waiter('instance_status_ok').wait(InstanceIds=[backend_id, frontend_id])
-    # La IP pública se asigna después de crearla, por eso la consulto ahora
+    # La IP pública se asigna después de crearla, por eso se consulta ahora
     response = ec2.describe_instances(InstanceIds=[frontend_id])
     ip_frontend = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
     print(f"IP pública del frontend: {ip_frontend}")
@@ -372,7 +372,8 @@ def main():
     print(f"  Instancias:      {backend_id} (backend) {frontend_id} (frontend)")
 
 
-# Si AWS devuelve un error (credenciales vencidas, permisos...), lo muestro y salgo con 1
+# Si AWS devuelve un error (credenciales vencidas, permisos...), se muestra
+# y el script termina con código 1
 if __name__ == '__main__':
     try:
         main()
