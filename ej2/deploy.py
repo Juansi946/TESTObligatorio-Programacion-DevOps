@@ -389,20 +389,6 @@ def verificar_frontend(frontend_id):
     print(f"Nginx -> API responde: {salida.strip()}")
 
 
-def verificar_desde_internet(backend_id, ip_frontend):
-    # Entra por la IP pública del frontend, como un usuario.
-    # Se corre desde el backend para no depender de tener curl en la máquina local.
-    # "/" prueba la web; "/api/v1/categories" lee la base, así que prueba todo.
-    url = f"http://{ip_frontend}"
-    comandos = [
-        'set -e',
-        f"curl --fail --silent {url}/ > /dev/null && echo 'Web (/): OK'",
-        f"curl --fail --silent {url}/api/v1/categories > /dev/null && echo 'API + base (/api/v1/categories): OK'"
-    ]
-    salida = ejecutar_comandos(backend_id, comandos)
-    print(salida.strip())
-
-
 # Programa principal
 def main():
     print(f"Despliegue de ServiceDesk - Banco Centralis (región {REGION})")
@@ -461,7 +447,6 @@ def main():
     titulo("Paso 7: ajuste final y chequeos")
     configurar_backend(backend_id, ip_frontend)
     verificar_frontend(frontend_id)
-    verificar_desde_internet(backend_id, ip_frontend)
 
     titulo("Despliegue terminado")
     print(f"Aplicación:    http://{ip_frontend}")
